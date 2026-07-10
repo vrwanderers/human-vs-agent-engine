@@ -69,6 +69,13 @@ curl -X POST http://127.0.0.1:8000/api/matches/MATCH_ID/actions \
 
 单局评价位于 `GET /api/matches/{id}/evaluation`；跨对局实验汇总位于 `GET /api/evaluations/summary`，会按 `MOD:模式` 分组比较综合分与五维分数。
 
+运行评分 v2 的多种子镜像基准（对抗模式会交换双方席位）：
+
+```bash
+python -m hva_engine.benchmark --seeds 25
+# 安装后也可使用：hva-benchmark --seeds 25
+```
+
 ## 设计原则
 
 1. **先评价，再扩展**：所有对局从第一回合开始产生同构事件和评分。
@@ -91,7 +98,7 @@ curl -X POST http://127.0.0.1:8000/api/matches/MATCH_ID/actions \
 
 ## 路线图
 
-- M1：采集真实玩家/Agent 基线，校准五维权重
+- M1：采集真实玩家/Agent 基线，校准评分 v2 权重与难度曲线
 - M2：加入并行回合、隐藏信息、回放与持久化
 - M3：远程 LLM Agent 沙箱、Elo/Glicko 锦标赛和观众投票窗口
 - M4：MOD SDK、资产协议、直播平台正式适配器与 Godot 可视化组件库

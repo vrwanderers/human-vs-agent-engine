@@ -17,12 +17,18 @@ class DebateArena(GameMod):
     _actions = ("evidence", "emotion", "rebuttal")
 
     def initial_state(self, players: list[Player], rng: Random) -> dict[str, Any]:
+        order = [p.id for p in players]
+        rng.shuffle(order)
         return {
             "turn": 0,
             "max_turns": 10,
-            "order": [p.id for p in players],
+            "order": order,
+            "initiative": order[0],
             "credibility": {p.id: 5.0 for p in players},
-            "support": {p.id: 50.0 for p in players},
+            "support": {
+                order[0]: 55.0,
+                order[1]: 45.0,
+            },
             "last_move": {p.id: None for p in players},
             "winner": None,
             "topic": "AI 是否应当参与公共决策？",
@@ -71,7 +77,9 @@ class DebateArena(GameMod):
         new["last_move"][actor_id] = action.type
         new["turn"] += 1
         if new["turn"] >= new["max_turns"]:
-            new["winner"] = max(new["order"], key=lambda pid: new["support"][pid])
+            best = max(new["support"].values())
+            leaders = [pid for pid in new["order"] if new["support"][pid] == best]
+            new["winner"] = leaders[0] if len(leaders) == 1 else "draw"
         return new, [{"type": "audience_shift", "swing": round(swing, 2), "move": action.type}]
 
     def is_terminal(self, state: dict[str, Any]) -> bool:

@@ -42,10 +42,12 @@ class Match:
     def status(self) -> MatchStatus:
         return MatchStatus.FINISHED if self.mod.is_terminal(self.state) else MatchStatus.ACTIVE
 
-    def add_event(self, event_type: str, actor_id: str | None = None, **payload: Any) -> None:
-        self.events.append(
-            GameEvent(seq=len(self.events) + 1, type=event_type, actor_id=actor_id, payload=payload)
+    def add_event(self, event_type: str, actor_id: str | None = None, **payload: Any) -> GameEvent:
+        event = GameEvent(
+            seq=len(self.events) + 1, type=event_type, actor_id=actor_id, payload=payload
         )
+        self.events.append(event)
+        return event
 
 
 class GameEngine:
@@ -65,6 +67,7 @@ class GameEngine:
         human_name: str = "Human",
         seed: int | None = None,
         mode: MatchMode | str | None = None,
+        reverse_seats: bool = False,
     ) -> MatchView:
         if mod_id not in self.mods:
             raise EngineError(f"Unknown MOD: {mod_id}")
@@ -86,6 +89,8 @@ class GameEngine:
                 f"MOD {mod_id} does not support {selected_mode.value}; supported: {supported}"
             )
         players = self._make_players(selected_mode, human_name)
+        if reverse_seats:
+            players.reverse()
         human = next((p for p in players if p.kind == ActorKind.HUMAN), None)
         brains = {
             p.id: AgentBrain(p.id, "coop" if "coop" in selected_mode.value else "opponent")
@@ -141,14 +146,26 @@ class GameEngine:
     def _apply(
         self, match: Match, actor_id: str, action: Action, source: str
     ) -> list[dict[str, Any]]:
-        new_state, emitted = match.mod.apply_action(match.state, actor_id, action, match.rng)
+        previous_state = match.state
+        scores_before = match.mod.scores(previous_state)
+        new_state, emitted = match.mod.apply_action(previous_state, actor_id, action, match.rng)
         match.state = new_state
+        scores_after = match.mod.scores(match.state)
+        changed_keys = sorted(
+            key
+            for key in set(previous_state) | set(new_state)
+            if previous_state.get(key) != new_state.get(key)
+        )
         match.add_event(
             "action_applied",
             actor_id,
             action_type=action.type,
             action_payload=action.payload,
             source=source,
+            scores_before=scores_before,
+            scores_after=scores_after,
+            changed_state_keys=changed_keys,
+            leaders_after=self._leaders(scores_after),
         )
         for item in emitted:
             details = dict(item)
@@ -164,6 +181,12 @@ class GameEngine:
                 ("game_fact", action.type),
             )
         return emitted
+
+    def _leaders(self, scores: dict[str, float]) -> list[str]:
+        if not scores:
+            return []
+        best = max(scores.values())
+        return sorted(player_id for player_id, value in scores.items() if value == best)
 
     def _run_agents(self, match: Match) -> None:
         player_map = {player.id: player for player in match.players}
@@ -188,12 +211,21 @@ class GameEngine:
             action, trace = brain.decide(match.mod, match.state, legal, match.rng)
             if action not in legal:
                 raise EngineError("Agent policy returned an illegal action")
-            match.add_event("agent_decision", actor_id, action_type=action.type, **trace)
+            score_before = match.mod.scores(match.state).get(actor_id, 0.0)
+            decision_event = match.add_event(
+                "agent_decision", actor_id, action_type=action.type, **trace
+            )
             emitted = self._apply(match, actor_id, action, source="baseline_agent")
+            expected = set(trace["prediction"]["expected_events"])
+            actual = {item["type"] for item in emitted}
+            decision_event.payload["prediction_verified"] = bool(expected) and bool(
+                expected & actual
+            )
             brain.remember(
                 int(match.state.get("turn", len(match.events))),
                 action,
                 emitted,
+                score_before,
                 match.mod.scores(match.state).get(actor_id, 0.0),
             )
             guard += 1
@@ -243,13 +275,33 @@ class GameEngine:
 
         def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
             dimensions = items[0]["dimensions"]
+            composite_values = [item["composite_score"] for item in items]
             return {
                 "matches": len(items),
-                "composite_score": round(
-                    sum(item["composite_score"] for item in items) / len(items), 3
+                "composite_score": round(sum(composite_values) / len(composite_values), 3),
+                "composite_sd": round(
+                    (
+                        sum(
+                            (value - sum(composite_values) / len(composite_values)) ** 2
+                            for value in composite_values
+                        )
+                        / len(composite_values)
+                    )
+                    ** 0.5,
+                    3,
                 ),
                 "dimensions": {
-                    key: round(sum(item["dimensions"][key] for item in items) / len(items), 3)
+                    key: (
+                        round(sum(values) / len(values), 3)
+                        if (
+                            values := [
+                                item["dimensions"][key]
+                                for item in items
+                                if item["dimensions"][key] is not None
+                            ]
+                        )
+                        else None
+                    )
                     for key in dimensions
                 },
             }

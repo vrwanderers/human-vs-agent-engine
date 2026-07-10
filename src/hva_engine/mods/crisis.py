@@ -17,12 +17,15 @@ class CrisisCoop(GameMod):
     supported_modes = ("agent_coop", "human_agent_coop")
 
     def initial_state(self, players: list[Player], rng: Random) -> dict[str, Any]:
+        order = [p.id for p in players]
+        rng.shuffle(order)
         return {
             "turn": 0,
             "max_turns": 16,
-            "order": [p.id for p in players],
-            "threat": 78.0,
-            "supplies": 52.0,
+            "order": order,
+            "initiative": order[0],
+            "threat": round(rng.uniform(76, 90), 2),
+            "supplies": round(rng.uniform(44, 54), 2),
             "intel": 10.0,
             "trust": 45.0,
             "synergy": 0.0,
@@ -71,21 +74,21 @@ class CrisisCoop(GameMod):
             emitted.append({"type": "resources_recovered", "supplies": new["supplies"]})
         new["last_actions"][actor_id] = action.type
         new["turn"] += 1
-        if new["turn"] % 4 == 0 and rng.random() < 0.45:
-            surge = max(2, 8 - new["intel"] / 20)
+        if new["turn"] % 3 == 0 and rng.random() < 0.55:
+            surge = max(3, 10 - new["intel"] / 18)
             new["threat"] += surge
             emitted.append({"type": "crisis_surge", "amount": round(surge, 2)})
         if new["threat"] <= 0:
             new["success"] = True
         elif new["turn"] >= new["max_turns"] or new["threat"] >= 110:
-            new["success"] = new["threat"] < 35
+            new["success"] = new["threat"] < 30
         return new, emitted
 
     def is_terminal(self, state: dict[str, Any]) -> bool:
         return state["success"] is not None
 
     def scores(self, state: dict[str, Any]) -> dict[str, float]:
-        team_score = max(0.0, 1.5 - state["threat"] / 78)
+        team_score = max(0.0, 1.5 - state["threat"] / 86)
         if state["success"] is True:
             team_score += 0.5
         return {pid: round(team_score, 3) for pid in state["order"]}

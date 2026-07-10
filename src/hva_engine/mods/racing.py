@@ -16,12 +16,16 @@ class RacingStrategy(GameMod):
     capabilities = frozenset({"turn_based", "numeric_state", "stochastic", "audience_input"})
 
     def initial_state(self, players: list[Player], rng: Random) -> dict[str, Any]:
+        order = [p.id for p in players]
+        rng.shuffle(order)
         return {
             "turn": 0,
             "max_turns": 24,
             "track_length": 36,
-            "order": [p.id for p in players],
+            "order": order,
+            "initiative": order[0],
             "weather": "dry",
+            "finished": False,
             "cars": {p.id: {"position": 0, "speed": 1, "fuel": 18, "tyres": 100} for p in players},
             "winner": None,
         }
@@ -64,14 +68,17 @@ class RacingStrategy(GameMod):
         if new["turn"] % 6 == 0:
             new["weather"] = "rain" if rng.random() < 0.4 else "dry"
             emitted.append({"type": "weather_changed", "weather": new["weather"]})
-        if car["position"] >= new["track_length"]:
-            new["winner"] = actor_id
-        elif new["turn"] >= new["max_turns"]:
-            new["winner"] = max(new["order"], key=lambda pid: new["cars"][pid]["position"])
+        round_finished = new["turn"] % len(new["order"]) == 0
+        crossed = any(new["cars"][pid]["position"] >= new["track_length"] for pid in new["order"])
+        if round_finished and (crossed or new["turn"] >= new["max_turns"]):
+            best = max(new["cars"][pid]["position"] for pid in new["order"])
+            leaders = [pid for pid in new["order"] if new["cars"][pid]["position"] == best]
+            new["winner"] = leaders[0] if len(leaders) == 1 else None
+            new["finished"] = True
         return new, emitted
 
     def is_terminal(self, state: dict[str, Any]) -> bool:
-        return state["winner"] is not None or state["turn"] >= state["max_turns"]
+        return state["finished"]
 
     def scores(self, state: dict[str, Any]) -> dict[str, float]:
         return {

@@ -23,6 +23,9 @@ dev = [
   "ruff>=0.6,<1",
 ]
 
+[project.scripts]
+hva-benchmark = "hva_engine.benchmark:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/hva_engine"]
 

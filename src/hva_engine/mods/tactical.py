@@ -18,10 +18,13 @@ class TacticalDuel(GameMod):
     _directions = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
     def initial_state(self, players: list[Player], rng: Random) -> dict[str, Any]:
+        order = [p.id for p in players]
+        rng.shuffle(order)
         return {
             "turn": 0,
             "max_turns": 30,
-            "order": [p.id for p in players],
+            "order": order,
+            "initiative": order[0],
             "units": {
                 players[0].id: {"x": 0, "y": 2, "hp": 10, "energy": 2},
                 players[1].id: {"x": 4, "y": 2, "hp": 10, "energy": 2},
@@ -68,7 +71,7 @@ class TacticalDuel(GameMod):
             emitted.append({"type": "unit_moved", "position": [unit["x"], unit["y"]]})
         elif action.type == "attack":
             target_id = action.payload["target_id"]
-            damage = 2 + int(unit["energy"] >= 3)
+            damage = 1 + int(unit["energy"] >= 3) + rng.randint(0, 1)
             new["units"][target_id]["hp"] = max(0, new["units"][target_id]["hp"] - damage)
             unit["energy"] -= 1
             emitted.append({"type": "unit_attacked", "target_id": target_id, "damage": damage})
@@ -79,7 +82,9 @@ class TacticalDuel(GameMod):
             emitted.append({"type": "unit_charged", "energy": unit["energy"]})
         new["turn"] += 1
         if new["turn"] >= new["max_turns"] and not new["winner"]:
-            new["winner"] = max(new["order"], key=lambda pid: new["units"][pid]["hp"])
+            best_hp = max(new["units"][pid]["hp"] for pid in new["order"])
+            leaders = [pid for pid in new["order"] if new["units"][pid]["hp"] == best_hp]
+            new["winner"] = leaders[0] if len(leaders) == 1 else None
         return new, emitted
 
     def is_terminal(self, state: dict[str, Any]) -> bool:

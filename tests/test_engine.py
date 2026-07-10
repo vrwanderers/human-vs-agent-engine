@@ -1,7 +1,9 @@
 import pytest
 
+from hva_engine.benchmark import run_benchmark
 from hva_engine.engine import EngineError, build_default_engine
-from hva_engine.models import MatchMode
+from hva_engine.evaluation import MatchEvaluator
+from hva_engine.models import ActorKind, GameEvent, MatchMode, Player
 
 
 @pytest.mark.parametrize("mod_id", ["tactical_duel", "racing_strategy", "debate_arena"])
@@ -77,3 +79,45 @@ def test_cross_match_evaluation_groups_by_mod_and_mode() -> None:
     assert summary["matches"] == 2
     assert set(summary["groups"]) == {"debate_arena:agent_vs_agent", "crisis_coop:agent_coop"}
     assert 0 <= summary["overall"]["composite_score"] <= 1
+    assert summary["overall"]["composite_sd"] >= 0
+
+
+def test_agent_only_engagement_is_not_applicable_in_v2() -> None:
+    engine = build_default_engine()
+    view = engine.create_match("debate_arena", seed=1, mode=MatchMode.AGENT_VS_AGENT)
+    evaluation = engine.evaluation(view.id)
+    assert evaluation["version"] == "mvp-2"
+    assert evaluation["dimensions"]["player_engagement"] is None
+    assert evaluation["valid_for_comparison"] is True
+
+
+def test_rules_compliance_is_a_scoring_gate() -> None:
+    players = [
+        Player(id="a", name="Agent A", kind=ActorKind.AGENT),
+        Player(id="b", name="Agent B", kind=ActorKind.AGENT),
+    ]
+    events = [GameEvent(seq=1, type="agent_decision", actor_id="a")]
+    evaluation = MatchEvaluator().evaluate(
+        build_default_engine().mods["debate_arena"],
+        players,
+        events,
+        {"a": 1.0, "b": 1.0},
+        True,
+        MatchMode.AGENT_VS_AGENT,
+    )
+    assert evaluation["valid_for_comparison"] is False
+    assert evaluation["composite_score"] == 0.0
+
+
+def test_benchmark_reports_identity_and_initiative_fairness() -> None:
+    result = run_benchmark(
+        build_default_engine(), "debate_arena", MatchMode.AGENT_VS_AGENT, range(6)
+    )
+    assert result["matches"] == 12
+    assert result["mirror_pairs"] == 6
+    assert result["rules_valid_rate"] == 1.0
+    assert result["identity_anchor_win_equivalent"] == 0.5
+    assert result["seat0_win_equivalent"] is not None
+    assert result["initiative_win_equivalent"] is not None
+    assert 0 <= result["balance"]["initiative_balance"] <= 1
+    assert 0 <= result["balance"]["repeated_draw_penalty"] <= 1
