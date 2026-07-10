@@ -47,6 +47,28 @@ def test_blackboard_is_team_scoped() -> None:
         board.publish("outsider", "inject this")
 
 
+def test_layer_budget_preserves_every_header_instead_of_tail_slicing() -> None:
+    policy = ContextPolicy(total_char_budget=5_000, memory_char_budget=1_200)
+    packet = ContextComposer(policy).compose(
+        match_id="long-match",
+        agent_id="agent-a",
+        role="opponent",
+        mod=DebateArena(),
+        state={"oversized": "state" * 1_000},
+        world_model={"uncertainty": 0.4},
+        memory=[{"turn": 1, "action": "evidence", "detail": "memory" * 1_000}],
+        legal_actions=[Action(type="evidence")],
+        shared_facts=[],
+        identity={"background": "history" * 50},
+        fact_graph={"facts": [{"object": "fact" * 1_000}]},
+    )
+    rendered = "\n".join(message.content for message in packet.messages)
+    assert packet.diagnostics["char_count"] <= policy.total_char_budget
+    assert packet.diagnostics["truncated_sections"]
+    for layer in range(7, 15):
+        assert f"[L{layer}" in rendered
+
+
 class FakeProvider:
     name = "fake"
 

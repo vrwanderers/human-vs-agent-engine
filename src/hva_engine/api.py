@@ -63,7 +63,12 @@ async def dashboard() -> FileResponse:
 
 @app.get("/health")
 async def health() -> dict[str, object]:
-    return {"status": "ok", "mods": len(engine.mods), "matches": len(engine.matches)}
+    return {
+        "status": "ok",
+        "mods": len(engine.mods),
+        "matches": len(engine.matches),
+        "fact_store": engine.fact_store.name,
+    }
 
 
 @app.get("/api/mods")
@@ -74,7 +79,13 @@ async def list_mods() -> list[dict[str, object]]:
 @app.post("/api/matches", response_model=MatchView, status_code=201)
 async def create_match(request: CreateMatchRequest) -> MatchView:
     try:
-        return engine.create_match(request.mod_id, request.human_name, request.seed, request.mode)
+        return engine.create_match(
+            request.mod_id,
+            request.human_name,
+            request.seed,
+            request.mode,
+            agent_tuning=request.agent_tuning,
+        )
     except EngineError as exc:
         raise _bad_request(exc) from exc
 
@@ -114,6 +125,14 @@ async def evaluation_summary() -> dict[str, object]:
 async def context_preview(match_id: str, agent_id: str) -> dict[str, object]:
     try:
         return engine.context_preview(match_id, agent_id)
+    except EngineError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/matches/{match_id}/agents/{agent_id}/fact-graph")
+async def public_fact_graph(match_id: str, agent_id: str) -> dict[str, object]:
+    try:
+        return engine.public_fact_graph(match_id, agent_id)
     except EngineError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

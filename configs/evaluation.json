@@ -1,10 +1,10 @@
 {
-  "version": "mvp-2",
+  "version": "mvp-3",
   "weights_by_mode": {
-    "human_vs_agent": {"player_engagement": 0.25, "engine_generality": 0.15, "dynamism": 0.20, "virtual_player_rating": 0.15, "ai_opponent_intelligence": 0.25},
-    "agent_vs_agent": {"engine_generality": 0.18, "dynamism": 0.28, "virtual_player_rating": 0.18, "ai_opponent_intelligence": 0.36},
-    "agent_coop": {"engine_generality": 0.16, "dynamism": 0.26, "virtual_player_rating": 0.18, "ai_opponent_intelligence": 0.40},
-    "human_agent_coop": {"player_engagement": 0.20, "engine_generality": 0.15, "dynamism": 0.20, "virtual_player_rating": 0.15, "ai_opponent_intelligence": 0.30}
+    "human_vs_agent": {"player_engagement": 0.23, "engine_generality": 0.13, "dynamism": 0.17, "virtual_player_rating": 0.12, "ai_opponent_intelligence": 0.20, "ai_human_likeness": 0.15},
+    "agent_vs_agent": {"engine_generality": 0.15, "dynamism": 0.23, "virtual_player_rating": 0.15, "ai_opponent_intelligence": 0.32, "ai_human_likeness": 0.15},
+    "agent_coop": {"engine_generality": 0.14, "dynamism": 0.22, "virtual_player_rating": 0.15, "ai_opponent_intelligence": 0.34, "ai_human_likeness": 0.15},
+    "human_agent_coop": {"player_engagement": 0.18, "engine_generality": 0.13, "dynamism": 0.17, "virtual_player_rating": 0.12, "ai_opponent_intelligence": 0.25, "ai_human_likeness": 0.15}
   },
   "targets": {
     "composite_score": 0.65,
@@ -12,6 +12,7 @@
     "engine_generality": 0.80,
     "dynamism": 0.65,
     "virtual_player_rating": 0.60,
-    "ai_opponent_intelligence": 0.65
+    "ai_opponent_intelligence": 0.65,
+    "ai_human_likeness": 0.70
   }
 }

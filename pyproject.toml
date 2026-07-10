@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+neo4j = [
+  "neo4j>=5.20,<6",
+]
 dev = [
   "pytest>=8.2,<9",
   "pytest-cov>=5,<7",

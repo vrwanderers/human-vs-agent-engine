@@ -5,7 +5,16 @@ from dataclasses import dataclass, field
 from random import Random
 from typing import Any
 
+from hva_engine.cognition import (
+    AgentIdentity,
+    CognitiveProfile,
+    CognitiveState,
+    RuntimeBehaviorPolicy,
+    action_utilities,
+    bounded_choice,
+)
 from hva_engine.context import ContextComposer, ContextPacket, SharedFact
+from hva_engine.fact_graph import AgentFactGraph
 from hva_engine.models import Action, GameEvent
 from hva_engine.mods.base import GameMod
 
@@ -19,21 +28,37 @@ class MemoryItem:
     score_before: float
     score_after: float
     score_delta: float
+    predicted_events: list[str]
+    surprise: float
+    regret: float
 
 
 @dataclass
 class AgentBrain:
-    """Inspectable baseline brain: perception → world model → memory → constrained decision."""
+    """Inspectable human-like brain without exposing private chain-of-thought."""
 
     player_id: str
     role: str
+    profile: CognitiveProfile
+    identity: AgentIdentity
+    behavior_policy: RuntimeBehaviorPolicy
+    fact_graph: AgentFactGraph
     memory_limit: int = 12
     memory: deque[MemoryItem] = field(default_factory=lambda: deque(maxlen=12))
     world_model: dict[str, Any] = field(default_factory=dict)
+    cognition: CognitiveState = field(default_factory=CognitiveState)
+    opponent_model: dict[str, Any] = field(default_factory=dict)
     decisions: int = 0
     last_context: ContextPacket | None = None
     _match_id: str = ""
     _shared_facts: list[SharedFact] = field(default_factory=list)
+    _observed_event_seq: int = 0
+    _revealed_story_titles: set[str] = field(default_factory=set)
+    _last_interpretation_fact_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.memory.maxlen != self.memory_limit:
+            self.memory = deque(self.memory, maxlen=self.memory_limit)
 
     def observe(
         self,
@@ -46,15 +71,123 @@ class AgentBrain:
     ) -> dict[str, Any]:
         turn = int(state.get("turn", len(events)))
         rivals = {pid: score for pid, score in scores.items() if pid != self.player_id}
+        own_score = scores.get(self.player_id, 0.0)
+        rival_best = max(rivals.values(), default=own_score)
+        margin = own_score - rival_best
+        latest_delta = self.memory[-1].score_delta if self.memory else 0.0
+        self.cognition.confidence = max(
+            0.05,
+            min(0.95, 0.55 * self.cognition.confidence + 0.45 * (0.5 + margin / 3)),
+        )
+        negative_signal = max(0.0, -latest_delta) + max(0.0, -margin) * 0.2
+        self.cognition.frustration = max(
+            0.0, min(1.0, self.cognition.frustration * 0.72 + negative_signal)
+        )
+        self.cognition.arousal = max(
+            0.1, min(1.0, 0.25 + abs(margin) * 0.2 + self.cognition.frustration * 0.35)
+        )
+        self.cognition.fatigue = min(0.85, self.decisions / 32)
+        self.cognition.uncertainty = max(
+            0.08, min(0.92, 0.62 - 0.035 * len(self.memory) + 0.2 * self.cognition.surprise)
+        )
+        setback_streak = 0
+        for item in reversed(self.memory):
+            if item.score_delta >= 0:
+                break
+            setback_streak += 1
+        pressure = (
+            0.32 * self.cognition.frustration
+            + 0.22 * self.cognition.uncertainty
+            + 0.18 * self.cognition.fatigue
+            + 0.16 * self.cognition.surprise
+            + 0.12 * min(1.0, setback_streak / 3)
+        )
+        self.cognition.stress = max(0.03, min(0.98, 0.52 * self.cognition.stress + 0.48 * pressure))
+        self.cognition.morale = max(
+            0.03,
+            min(
+                0.98,
+                0.52 * self.cognition.confidence
+                + 0.24 * (1 - self.cognition.frustration)
+                + 0.14 * (1 - self.cognition.fatigue)
+                + 0.10 * max(0.0, latest_delta),
+            ),
+        )
+        self.cognition.anger = max(
+            0.0,
+            min(
+                1.0,
+                self.cognition.anger * 0.58
+                + self.cognition.frustration * (0.35 + 0.45 * self.profile.machiavellianism),
+            ),
+        )
+        self.cognition.fear = max(
+            0.02,
+            min(
+                0.95,
+                0.50 * self.cognition.fear
+                + 0.30 * self.cognition.stress * self.profile.loss_aversion
+                + 0.20 * self.cognition.uncertainty,
+            ),
+        )
+        if "coop" in self.role:
+            shared_signal = min(1.0, len(shared_facts or []) / 6)
+            self.cognition.social_trust = max(
+                0.1,
+                min(
+                    0.95,
+                    0.65 * self.cognition.social_trust
+                    + 0.25 * shared_signal
+                    + 0.10 * self.cognition.morale,
+                ),
+            )
+        self._update_opponent_model(events)
+        self._update_intention("coop" in self.role)
+        intention_fact = self.fact_graph.upsert_runtime(
+            "state.current_intention", self.cognition.intention
+        )
+        self.fact_graph.upsert_runtime(
+            "state.psychological_matrix", self.cognition.psychology_view()
+        )
+        opponent_fact = self.fact_graph.upsert_runtime(
+            "belief.opponent_pattern",
+            {
+                "dominant_action": self.opponent_model.get("dominant_action"),
+                "confidence": self.opponent_model.get("confidence", 0.0),
+            },
+        )
+        feeling = (
+            "under_pressure"
+            if self.cognition.stress >= 0.6
+            else "frustrated"
+            if self.cognition.frustration >= 0.45
+            else "steady"
+        )
+        interpretation = self.fact_graph.propose(
+            subject=self.player_id,
+            predicate="belief.interpretation",
+            value={
+                "opponent_tendency": self.opponent_model.get("dominant_action"),
+                "current_feeling": feeling,
+                "chosen_intention": self.cognition.intention,
+            },
+            basis_fact_ids=[intention_fact.id, opponent_fact.id],
+            supersedes_fact_id=self._last_interpretation_fact_id,
+            confidence=max(0.35, float(self.opponent_model.get("confidence", 0.0))),
+        )
+        self._last_interpretation_fact_id = interpretation.id
         self.world_model = {
             "turn": turn,
-            "self_score": round(scores.get(self.player_id, 0.0), 3),
+            "self_score": round(own_score, 3),
             "other_scores": rivals,
+            "score_margin": round(margin, 3),
             "terminal": mod.is_terminal(state),
             "recent_events": [event.type for event in events[-4:]],
             "objective": "shared_success" if "coop" in self.role else "outperform_opponents",
             "memory_depth": len(self.memory),
             "shared_fact_count": len(shared_facts or []),
+            "belief_uncertainty": round(self.cognition.uncertainty, 3),
+            "opponent_model": self.opponent_model,
         }
         self._match_id = match_id
         self._shared_facts = list(shared_facts or [])
@@ -79,33 +212,93 @@ class AgentBrain:
             memory=[item.__dict__ for item in self.memory],
             legal_actions=legal,
             shared_facts=self._shared_facts,
+            persona=self.profile.public_view(),
+            identity=self.identity.private_view(),
+            cognitive_state=self.cognition.public_view(),
+            opponent_model=self.opponent_model,
+            behavior_policy=self.behavior_policy.public_view(),
+            fact_graph=self.fact_graph.private_view(),
         )
         baseline_action = mod.agent_action(state, self.player_id, legal, rng)
-        action = baseline_action
-        memory_used = len(self.memory) >= 3
-        if memory_used:
-            learned: dict[str, list[float]] = {}
-            for item in self.memory:
-                learned.setdefault(item.action, []).append(item.score_delta)
-            averages = {key: sum(values) / len(values) for key, values in learned.items()}
-            known_legal = [candidate for candidate in legal if candidate.type in averages]
-            if known_legal and baseline_action.type in averages:
-                best = max(known_legal, key=lambda candidate: averages[candidate.type])
-                if averages[best.type] > averages[baseline_action.type] + 0.02:
-                    action = best
-        memory_influenced = action != baseline_action
-        confidence = min(0.92, 0.62 + 0.025 * len(self.memory))
+        learned: dict[str, list[float]] = {}
+        for item in self.memory:
+            learned.setdefault(item.action, []).append(item.score_delta - 0.15 * item.regret)
+        averages = {key: sum(values) / len(values) for key, values in learned.items()}
+        last_action = self.memory[-1].action if self.memory else None
+        utilities, components = action_utilities(
+            legal=legal,
+            baseline=baseline_action,
+            learned_values=averages,
+            last_action=last_action,
+            profile=self.profile,
+            cognition=self.cognition,
+            policy=self.behavior_policy,
+            identity_biases=self.identity.action_biases,
+            cooperative="coop" in self.role,
+            rng=rng,
+        )
+        choice_index = bounded_choice(utilities, self.behavior_policy.realism, rng)
+        action = legal[choice_index]
+        best_index = max(range(len(utilities)), key=utilities.__getitem__)
+        regret = max(0.0, utilities[best_index] - utilities[choice_index])
+        memory_used = len(self.memory) >= 2
+        memory_influenced = memory_used and bool(averages.get(action.type))
+        ranked_factors = sorted(
+            components[choice_index].items(), key=lambda item: abs(item[1]), reverse=True
+        )
+        dominant_factors = [name for name, value in ranked_factors[:3] if abs(value) >= 0.025]
+        sorted_utilities = sorted(utilities, reverse=True)
+        utility_gap = sorted_utilities[0] - sorted_utilities[1] if len(utilities) > 1 else 1.0
+        confidence = max(
+            0.15,
+            min(
+                0.95,
+                0.45
+                + utility_gap
+                - 0.18 * self.cognition.uncertainty
+                - 0.12 * self.cognition.fatigue,
+            ),
+        )
         prediction = self._prediction(mod, action)
         trace = {
             "policy": f"{mod.id}.baseline",
-            "rationale": f"Choose {action.type} from {len(legal)} rule-valid options",
+            "rationale": (
+                f"Pursue {self.cognition.intention}; chose {action.type} from "
+                f"{len(legal)} rule-valid options"
+            ),
             "confidence": round(confidence, 3),
+            "baseline_action": baseline_action.type,
             "memory_used": memory_used,
             "memory_influenced": memory_influenced,
             "memory_depth": len(self.memory),
             "world_model": self.world_model,
+            "persona": self.profile.public_view(),
+            "identity": self.identity.public_view(self._revealed_story_titles),
+            "cognitive_state": self.cognition.public_view(),
+            "psychological_matrix": self.cognition.psychology_view(),
+            "opponent_model": self.opponent_model,
+            "intention": self.cognition.intention,
+            "behavior_policy": self.behavior_policy.public_view(),
+            "fact_graph": self.fact_graph.public_view(),
+            "deliberation_summary": {
+                "options_considered": len(legal),
+                "dominant_factors": dominant_factors,
+                "utility_gap": round(utility_gap, 3),
+                "chosen_was_utility_max": choice_index == best_index,
+                "private_chain_of_thought_stored": False,
+            },
+            "human_like_signals": {
+                "stable_persona": True,
+                "stable_identity": True,
+                "autobiographical_memory": bool(self.identity.formative_memories),
+                "emotion_modeled": True,
+                "opponent_modeled": bool(self.opponent_model),
+                "persistent_intention": self.cognition.intention_age > 0,
+                "bounded_rationality": self.profile.decision_noise > 0,
+            },
             "predicted_effect": prediction["description"],
             "prediction": prediction,
+            "decision_regret_proxy": round(regret, 3),
             "prompt_layers": self.last_context.layers,
             "context_policy": self.last_context.diagnostics,
         }
@@ -119,16 +312,24 @@ class AgentBrain:
         emitted: list[dict[str, Any]],
         score_before: float,
         score_after: float,
+        trace: dict[str, Any],
     ) -> None:
+        expected = list(trace["prediction"]["expected_events"])
+        actual = [item["type"] for item in emitted]
+        surprise = 0.0 if set(expected) & set(actual) else (0.5 if not expected else 1.0)
+        self.cognition.surprise = surprise
         self.memory.append(
             MemoryItem(
                 turn=turn,
                 situation=f"turn={turn};objective={self.world_model.get('objective')}",
                 action=action.type,
-                outcome_events=[item["type"] for item in emitted],
+                outcome_events=actual,
                 score_before=round(score_before, 3),
                 score_after=round(score_after, 3),
                 score_delta=round(score_after - score_before, 3),
+                predicted_events=expected,
+                surprise=surprise,
+                regret=float(trace.get("decision_regret_proxy", 0.0)),
             )
         )
 
@@ -136,11 +337,114 @@ class AgentBrain:
         return {
             "role": self.role,
             "decisions": self.decisions,
+            "persona": self.profile.public_view(),
+            "identity": self.identity.public_view(self._revealed_story_titles),
+            "cognitive_state": self.cognition.public_view(),
+            "psychological_matrix": self.cognition.psychology_view(),
+            "opponent_model": self.opponent_model,
+            "behavior_policy": self.behavior_policy.public_view(),
+            "fact_graph": self.fact_graph.public_view(),
             "world_model": self.world_model,
             "memory_depth": len(self.memory),
             "recent_memory": [item.__dict__ for item in list(self.memory)[-3:]],
             "context_policy": self.last_context.diagnostics if self.last_context else None,
+            "narrative": {
+                "revealed_beats": len(self._revealed_story_titles),
+                "total_beats": len(self.identity.formative_memories),
+                "progress": round(
+                    len(self._revealed_story_titles)
+                    / max(1, len(self.identity.formative_memories)),
+                    3,
+                ),
+            },
         }
+
+    def maybe_reveal_story(self, terminal: bool = False) -> dict[str, Any] | None:
+        memories = {memory.title: memory for memory in self.identity.formative_memories}
+        thresholds = (
+            (
+                "the first costly lesson",
+                self.decisions >= 2
+                or self.cognition.stress >= 0.42
+                or self.cognition.frustration >= 0.35,
+                "pressure_or_setback",
+            ),
+            (
+                "a hard-won success",
+                self.decisions >= 4
+                or self.cognition.confidence >= 0.68
+                or self.opponent_model.get("observed_actions", 0) >= 3,
+                "trust_or_pattern_recognition",
+            ),
+            (
+                "a private promise",
+                self.decisions >= 6 or terminal,
+                "commitment_or_finale",
+            ),
+        )
+        for title, eligible, trigger in thresholds:
+            if not eligible or title in self._revealed_story_titles:
+                continue
+            memory = memories[title]
+            self._revealed_story_titles.add(title)
+            supporting_fact_id = self.fact_graph.formative_memory_fact_ids[title]
+            self.fact_graph.reveal(supporting_fact_id)
+            return {
+                "story_stage": len(self._revealed_story_titles),
+                "story_progress": round(
+                    len(self._revealed_story_titles) / max(1, len(memories)), 3
+                ),
+                "beat": memory.public_view(),
+                "supporting_fact_ids": [supporting_fact_id],
+                "trigger": trigger,
+                "identity_name": self.identity.name,
+                "disclosure": self.identity.disclosure,
+                "psychological_snapshot": self.cognition.psychology_view(),
+            }
+        return None
+
+    def _update_opponent_model(self, events: list[GameEvent]) -> None:
+        counts = dict(self.opponent_model.get("action_counts", {}))
+        observed = int(self.opponent_model.get("observed_actions", 0))
+        for event in events:
+            if event.seq <= self._observed_event_seq:
+                continue
+            if event.type == "action_applied" and event.actor_id != self.player_id:
+                action_type = str(event.payload.get("action_type", "unknown"))
+                counts[action_type] = counts.get(action_type, 0) + 1
+                observed += 1
+        self._observed_event_seq = max(
+            self._observed_event_seq, max((event.seq for event in events), default=0)
+        )
+        dominant = max(counts, key=counts.get) if counts else None
+        self.opponent_model = {
+            "observed_actions": observed,
+            "action_counts": counts,
+            "dominant_action": dominant,
+            "confidence": round(min(0.9, observed / 8), 3),
+        }
+
+    def _update_intention(self, cooperative: bool) -> None:
+        previous = self.cognition.intention
+        if self.cognition.anger > 0.68 and not cooperative:
+            target = "retaliate_selectively"
+        elif self.cognition.fear > 0.68:
+            target = "reduce_exposure"
+        elif cooperative and self.cognition.confidence < 0.42:
+            target = "protect_team"
+        elif self.cognition.frustration > 0.62 or self.cognition.stress > 0.72:
+            target = "break_pattern"
+        elif self.cognition.confidence > 0.68:
+            target = "press_advantage"
+        elif previous == "assess_situation":
+            target = "build_position"
+        else:
+            target = previous
+        if target == previous:
+            self.cognition.intention_age += 1
+        else:
+            self.cognition.intention = target
+            self.cognition.intention_age = 0
 
     def _prediction(self, mod: GameMod, action: Action) -> dict[str, Any]:
         expectations = {

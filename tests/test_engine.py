@@ -3,7 +3,7 @@ import pytest
 from hva_engine.benchmark import run_benchmark
 from hva_engine.engine import EngineError, build_default_engine
 from hva_engine.evaluation import MatchEvaluator
-from hva_engine.models import ActorKind, GameEvent, MatchMode, Player
+from hva_engine.models import ActorKind, AgentTuning, ContentMode, GameEvent, MatchMode, Player
 
 
 @pytest.mark.parametrize("mod_id", ["tactical_duel", "racing_strategy", "debate_arena"])
@@ -82,13 +82,88 @@ def test_cross_match_evaluation_groups_by_mod_and_mode() -> None:
     assert summary["overall"]["composite_sd"] >= 0
 
 
-def test_agent_only_engagement_is_not_applicable_in_v2() -> None:
+def test_agent_only_engagement_is_not_applicable_in_v3() -> None:
     engine = build_default_engine()
     view = engine.create_match("debate_arena", seed=1, mode=MatchMode.AGENT_VS_AGENT)
     evaluation = engine.evaluation(view.id)
-    assert evaluation["version"] == "mvp-2"
+    assert evaluation["version"] == "mvp-3"
     assert evaluation["dimensions"]["player_engagement"] is None
     assert evaluation["valid_for_comparison"] is True
+
+
+def test_agents_have_stable_identity_psychology_and_progressive_story_reveals() -> None:
+    engine = build_default_engine()
+    view = engine.create_match("debate_arena", seed=17, mode=MatchMode.AGENT_VS_AGENT)
+    assert view.status == "finished"
+    reveals = [event for event in view.events if event.type == "story_reveal"]
+    assert reveals
+    assert all(
+        event.payload["disclosure"] == "AI-controlled fictional character" for event in reveals
+    )
+    for agent_id, summary in view.agent_summaries.items():
+        matrix = summary["psychological_matrix"]
+        assert {
+            "confidence",
+            "morale",
+            "stress",
+            "frustration",
+            "anger",
+            "fear",
+            "fatigue",
+            "uncertainty",
+        } <= set(matrix)
+        assert summary["identity"]["disclosure"] == "AI-controlled fictional character"
+        assert summary["narrative"]["revealed_beats"] > 0
+        visible_fact_ids = {fact["id"] for fact in summary["fact_graph"]["facts"]}
+        assert summary["fact_graph"]["stats"]["improvised_versions"] > 0
+        assert summary["fact_graph"]["stats"]["superseded_versions"] > 0
+        agent_reveals = [event for event in reveals if event.actor_id == agent_id]
+        assert all(
+            set(event.payload["supporting_fact_ids"]) <= visible_fact_ids for event in agent_reveals
+        )
+        decisions = [
+            event
+            for event in view.events
+            if event.type == "agent_decision" and event.actor_id == agent_id
+        ]
+        assert len({event.payload["persona"]["archetype"] for event in decisions}) == 1
+        assert len({event.payload["identity"]["name"] for event in decisions}) == 1
+        assert all(
+            event.payload["deliberation_summary"]["private_chain_of_thought_stored"] is False
+            for event in decisions
+        )
+    profile = engine.evaluation(view.id)["ai_capability_profile"]
+    assert profile["human_likeness"] > 0
+    assert profile["fact_graph_grounding"] == 1.0
+    assert profile["story_fact_provenance"] == 1.0
+    assert profile["human_likeness_components"]["narrative_revelation"] > 0
+
+
+def test_shadow_style_is_configurable_but_engine_policy_remains_authoritative() -> None:
+    standard_engine = build_default_engine()
+    standard = standard_engine.create_match(
+        "debate_arena",
+        seed=5,
+        mode=MatchMode.AGENT_VS_AGENT,
+        agent_tuning=AgentTuning(shadow_intensity=0.9),
+    )
+    assert all(
+        summary["behavior_policy"]["effective_shadow_intensity"] == 0.35
+        for summary in standard.agent_summaries.values()
+    )
+    mature_engine = build_default_engine()
+    mature = mature_engine.create_match(
+        "debate_arena",
+        seed=5,
+        mode=MatchMode.AGENT_VS_AGENT,
+        agent_tuning=AgentTuning(shadow_intensity=0.9, content_mode=ContentMode.MATURE_FICTION),
+    )
+    assert all(
+        summary["behavior_policy"]["effective_shadow_intensity"] == 0.9
+        and summary["behavior_policy"]["rules_authority"] == "engine_only"
+        for summary in mature.agent_summaries.values()
+    )
+    assert mature_engine.evaluation(mature.id)["valid_for_comparison"] is True
 
 
 def test_rules_compliance_is_a_scoring_gate() -> None:

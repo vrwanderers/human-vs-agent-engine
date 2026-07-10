@@ -6,11 +6,15 @@ from typing import Any
 from uuid import uuid4
 
 from hva_engine.agent_runtime import AgentBrain
+from hva_engine.cognition import AgentIdentity, CognitiveProfile, RuntimeBehaviorPolicy
 from hva_engine.context import SharedBlackboard
 from hva_engine.evaluation import MatchEvaluator
+from hva_engine.fact_graph import AgentFactGraph
+from hva_engine.fact_store import FactStore, InMemoryFactStore, build_fact_store_from_env
 from hva_engine.models import (
     Action,
     ActorKind,
+    AgentTuning,
     GameEvent,
     MatchMode,
     MatchStatus,
@@ -51,10 +55,11 @@ class Match:
 
 
 class GameEngine:
-    def __init__(self) -> None:
+    def __init__(self, fact_store: FactStore | None = None) -> None:
         self.mods: dict[str, GameMod] = {}
         self.matches: dict[str, Match] = {}
         self.evaluator = MatchEvaluator()
+        self.fact_store = fact_store or InMemoryFactStore()
 
     def register(self, mod: GameMod) -> None:
         if mod.id in self.mods:
@@ -68,6 +73,7 @@ class GameEngine:
         seed: int | None = None,
         mode: MatchMode | str | None = None,
         reverse_seats: bool = False,
+        agent_tuning: AgentTuning | None = None,
     ) -> MatchView:
         if mod_id not in self.mods:
             raise EngineError(f"Unknown MOD: {mod_id}")
@@ -92,18 +98,32 @@ class GameEngine:
         if reverse_seats:
             players.reverse()
         human = next((p for p in players if p.kind == ActorKind.HUMAN), None)
-        brains = {
-            p.id: AgentBrain(p.id, "coop" if "coop" in selected_mode.value else "opponent")
-            for p in players
-            if p.kind == ActorKind.AGENT
-        }
+        state = mod.initial_state(players, rng)
+        tuning = agent_tuning or AgentTuning()
+        behavior_policy = RuntimeBehaviorPolicy.from_tuning(tuning)
+        brains: dict[str, AgentBrain] = {}
+        for player in players:
+            if player.kind != ActorKind.AGENT:
+                continue
+            role = "coop" if "coop" in selected_mode.value else "opponent"
+            profile = CognitiveProfile.sample(rng, role, behavior_policy)
+            identity = AgentIdentity.sample(player.name, profile, role, rng)
+            fact_graph = AgentFactGraph.from_identity(player.id, identity, self.fact_store)
+            brains[player.id] = AgentBrain(
+                player.id,
+                role,
+                profile,
+                identity,
+                behavior_policy,
+                fact_graph,
+            )
         match = Match(
             id=match_id,
             mod=mod,
             mode=selected_mode,
             players=players,
             human_player_id=human.id if human else None,
-            state=mod.initial_state(players, rng),
+            state=state,
             rng=rng,
             agent_brains=brains,
             blackboard=(
@@ -227,7 +247,10 @@ class GameEngine:
                 emitted,
                 score_before,
                 match.mod.scores(match.state).get(actor_id, 0.0),
+                trace,
             )
+            if reveal := brain.maybe_reveal_story(match.status == MatchStatus.FINISHED):
+                match.add_event("story_reveal", actor_id, **reveal)
             guard += 1
             if guard > 100:
                 raise EngineError("Agent turn loop exceeded safety limit")
@@ -332,9 +355,17 @@ class GameEngine:
             "messages": [message.__dict__ for message in packet.messages],
         }
 
+    def public_fact_graph(self, match_id: str, agent_id: str) -> dict[str, Any]:
+        match = self.get(match_id)
+        try:
+            brain = match.agent_brains[agent_id]
+        except KeyError as exc:
+            raise EngineError("Unknown agent in this match") from exc
+        return brain.fact_graph.public_view()
+
 
 def build_default_engine() -> GameEngine:
-    engine = GameEngine()
+    engine = GameEngine(build_fact_store_from_env())
     for mod in (TacticalDuel(), RacingStrategy(), DebateArena(), CrisisCoop()):
         engine.register(mod)
     return engine

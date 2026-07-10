@@ -49,6 +49,7 @@ class OpenAICompatibleProvider:
         api_key: str | None = None,
         extra_headers: dict[str, str] | None = None,
         timeout: float = 30.0,
+        supports_response_format: bool = True,
     ) -> None:
         self.name = name
         self.base_url = base_url.rstrip("/")
@@ -56,6 +57,7 @@ class OpenAICompatibleProvider:
         self.api_key = api_key
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
+        self.supports_response_format = supports_response_format
 
     @classmethod
     def from_env(cls, prefix: str = "HVA_LLM") -> OpenAICompatibleProvider:
@@ -68,6 +70,10 @@ class OpenAICompatibleProvider:
             base_url=base_url,
             model=model,
             api_key=os.environ.get(f"{prefix}_API_KEY"),
+            supports_response_format=os.environ.get(
+                f"{prefix}_SUPPORTS_RESPONSE_FORMAT", "true"
+            ).lower()
+            not in {"0", "false", "no"},
         )
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
@@ -80,7 +86,7 @@ class OpenAICompatibleProvider:
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
         }
-        if request.response_format:
+        if request.response_format and self.supports_response_format:
             payload["response_format"] = request.response_format
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
@@ -124,6 +130,12 @@ class LLMDecisionClient:
     async def choose_action(
         self, messages: list[LLMMessage], legal_actions: list[dict[str, Any]]
     ) -> tuple[int, LLMResponse]:
+        index, _proposals, response = await self.choose_action_and_facts(messages, legal_actions)
+        return index, response
+
+    async def choose_action_and_facts(
+        self, messages: list[LLMMessage], legal_actions: list[dict[str, Any]]
+    ) -> tuple[int, list[dict[str, Any]], LLMResponse]:
         response = await self.provider.complete(LLMRequest(messages=messages))
         try:
             choice = json.loads(response.content)
@@ -132,4 +144,16 @@ class LLMDecisionClient:
             raise ValueError("LLM must return JSON with an integer action_index") from exc
         if not 0 <= index < len(legal_actions):
             raise ValueError("LLM selected an action outside the legal action list")
-        return index, response
+        proposals = choice.get("fact_proposals", [])
+        if not isinstance(proposals, list) or len(proposals) > 5:
+            raise ValueError("fact_proposals must be a list with at most five items")
+        required = {"subject", "predicate", "object", "basis_fact_ids"}
+        for proposal in proposals:
+            if not isinstance(proposal, dict) or not required <= set(proposal):
+                raise ValueError(
+                    "Every fact proposal must include subject, predicate, object, "
+                    "and basis_fact_ids"
+                )
+            if not isinstance(proposal["basis_fact_ids"], list):
+                raise ValueError("basis_fact_ids must be a list")
+        return index, proposals, response

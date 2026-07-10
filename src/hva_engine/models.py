@@ -25,6 +25,19 @@ class MatchMode(StrEnum):
     HUMAN_AGENT_COOP = "human_agent_coop"
 
 
+class ContentMode(StrEnum):
+    STANDARD = "standard"
+    MATURE_FICTION = "mature_fiction"
+
+
+class AgentTuning(BaseModel):
+    """Per-match cognitive style; engine rules remain authoritative in every mode."""
+
+    realism: float = Field(default=0.7, ge=0.0, le=1.0)
+    shadow_intensity: float = Field(default=0.0, ge=0.0, le=1.0)
+    content_mode: ContentMode = ContentMode.STANDARD
+
+
 class Player(BaseModel):
     id: str
     name: str
@@ -64,6 +77,7 @@ class CreateMatchRequest(BaseModel):
     human_name: str = Field(default="Human", min_length=1, max_length=40)
     seed: int | None = None
     mode: MatchMode | None = None
+    agent_tuning: AgentTuning = Field(default_factory=AgentTuning)
 
 
 class SubmitActionRequest(BaseModel):
