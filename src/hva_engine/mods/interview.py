@@ -362,14 +362,14 @@ class AdversarialInterview(GameMod):
 
     def _arc_stage(self, state: dict[str, Any]) -> str:
         if state["finished"]:
+            if state["defiance"] >= 52 and state["response_counts"].get("counterattack", 0) >= 2:
+                return "defiant"
             if (
                 state["authenticity"] >= 70
                 and state["coherence"] >= 72
                 and state["vulnerability"] >= 45
             ):
                 return "integrated"
-            if state["defiance"] >= 60 and state["trust"] < 42:
-                return "defiant"
             if state["composure"] < 35:
                 return "fractured"
             return "unresolved"
