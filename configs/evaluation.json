@@ -1,0 +1,18 @@
+{
+  "version": "mvp-1",
+  "weights": {
+    "player_engagement": 0.28,
+    "engine_generality": 0.20,
+    "dynamism": 0.18,
+    "virtual_player_rating": 0.14,
+    "ai_opponent_intelligence": 0.20
+  },
+  "targets": {
+    "composite_score": 0.72,
+    "player_engagement": 0.68,
+    "engine_generality": 0.80,
+    "dynamism": 0.65,
+    "virtual_player_rating": 0.60,
+    "ai_opponent_intelligence": 0.65
+  }
+}

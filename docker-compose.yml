@@ -1,0 +1,10 @@
+services:
+  engine:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      HVA_CORS_ORIGINS: "*"
+    volumes:
+      - ./src:/app/src:ro
+    command: uvicorn hva_engine.api:app --host 0.0.0.0 --port 8000 --reload

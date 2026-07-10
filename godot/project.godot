@@ -1,0 +1,18 @@
+; Human VS Agent Godot 4 client
+config_version=5
+
+[application]
+config/name="Human VS Agent"
+run/main_scene="res://main.tscn"
+
+[display]
+window/size/viewport_width=1100
+window/size/viewport_height=700
+window/size/window_width_override=1100
+window/size/window_height_override=700
+window/stretch/mode="canvas_items"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.035, 0.045, 0.065, 1)
