@@ -141,6 +141,8 @@ class AgentBrain:
                     + 0.10 * self.cognition.morale,
                 ),
             )
+        mod_psychology = mod.agent_psychological_signals(state, self.player_id)
+        self.cognition.apply_adjustments(mod_psychology)
         self._update_opponent_model(events)
         self._update_intention("coop" in self.role)
         intention_fact = self.fact_graph.upsert_runtime(
@@ -188,6 +190,9 @@ class AgentBrain:
             "shared_fact_count": len(shared_facts or []),
             "belief_uncertainty": round(self.cognition.uncertainty, 3),
             "opponent_model": self.opponent_model,
+            "mod_psychological_signals": {
+                key: round(value, 3) for key, value in mod_psychology.items()
+            },
         }
         self._match_id = match_id
         self._shared_facts = list(shared_facts or [])
@@ -461,6 +466,34 @@ class AgentBrain:
             ("crisis_coop", "research"): ("gain intelligence", ["intel_gained"]),
             ("crisis_coop", "stabilize"): ("reduce crisis severity", ["threat_reduced"]),
             ("crisis_coop", "conserve"): ("recover shared resources", ["resources_recovered"]),
+            ("adversarial_interview", "answer_honestly"): (
+                "increase authenticity through direct acknowledgment",
+                ["interview_response"],
+            ),
+            ("adversarial_interview", "deflect_with_humor"): (
+                "reduce pressure without fully surrendering the frame",
+                ["interview_response"],
+            ),
+            ("adversarial_interview", "counterattack"): (
+                "challenge the interviewer's premise at relational risk",
+                ["interview_response"],
+            ),
+            ("adversarial_interview", "set_boundary"): (
+                "restore composure by rejecting a degrading premise",
+                ["interview_response"],
+            ),
+            ("adversarial_interview", "admit_uncertainty"): (
+                "trade certainty for credibility and vulnerability",
+                ["interview_response"],
+            ),
+            ("adversarial_interview", "reframe"): (
+                "replace a false premise with a coherent interpretation",
+                ["interview_response"],
+            ),
+            ("adversarial_interview", "invoke_memory"): (
+                "ground identity explanation in canonical autobiography",
+                ["interview_response", "identity_memory_invoked"],
+            ),
         }
         description, events = expectations.get((mod.id, action.type), ("advance the objective", []))
         return {"description": description, "expected_events": events}

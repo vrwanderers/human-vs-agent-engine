@@ -30,6 +30,17 @@ AI 对手智能性同时提供不折叠的 `ai_capability_profile`：
 - `human_likeness`：人类感综合代理分
 - `human_likeness_components`：人格稳定、身份连续、心理建模/动态、对手建模、意图持续、有限理性和叙事揭露明细
 
+`adversarial_interview` 额外返回 `mod_specific_profile`，包括：
+
+- 问题主题覆盖率
+- 心理反应幅度（过于平坦和纯随机剧烈波动都会扣分）
+- MOD 压力信号是否进入心理矩阵
+- 身份解释与自传记忆使用
+- 故事揭露的事实图谱溯源
+- 回答策略多样性
+- 人物弧光阶段变化和终局完整度
+- 镇定、真实性、一致性与信任构成的韧性分
+
 规则遵守是准入门槛而非加分项；出现非法 Agent 决策时，`valid_for_comparison=false` 且综合分归零。Agent-only 基线局的玩家参与度为 `null`，不会参与加权。
 
 ## 镜像与公平性基准

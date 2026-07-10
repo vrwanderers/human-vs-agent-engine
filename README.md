@@ -6,7 +6,7 @@
 
 - 通用回合制状态机、MOD 注册表和可替换 Agent 策略
 - 6 维在线评价：玩家参与度、引擎通用性、动态性、虚拟玩家评价、AI 对手智能性、AI 人类感
-- 4 个 MVP MOD：`tactical_duel`、`racing_strategy`、`debate_arena`、`crisis_coop`
+- 5 个 MVP MOD：`tactical_duel`、`racing_strategy`、`debate_arena`、`crisis_coop`、`adversarial_interview`
 - 人类化 Agent 认知循环：稳定人格、自传身份、心理矩阵、有限理性、对手模型、意图持续与结果复盘
 - 渐进式角色故事揭露：关键回合、压力、受挫、信任和终局会产生 `story_reveal` 事件
 - 受约束的事实图谱：核心身世不可覆盖，自由发挥必须引用事实依据，可变事实保留修订链
@@ -66,6 +66,14 @@ curl -X POST http://127.0.0.1:8000/api/matches \
   -d '{"mod_id":"debate_arena","mode":"agent_vs_agent","seed":7,"agent_tuning":{"realism":0.85,"shadow_intensity":0.7,"content_mode":"mature_fiction"}}'
 ```
 
+启动“逆风采访”，用尖锐问题测试 Agent 的心理与人物弧光：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/matches \
+  -H 'content-type: application/json' \
+  -d '{"mod_id":"adversarial_interview","human_name":"Interviewer","seed":7}'
+```
+
 Agent-only 对局会自动运行到终局。响应中的 `agent_summaries` 暴露世界模型、心理矩阵、公开身份片段、叙事进度和公开事实图谱；事件流中的 `agent_decision` 保存可观察的简短理由、置信度与预期效果，但不保存私密思维链。
 
 默认 MVP 使用可复现的启发式 Agent，便于建立评价基线；`hva_engine.llm` 已提供分层上下文、Provider 注册表和严格动作索引解析，可在不改 MOD 规则的前提下替换为真实 LLM。
@@ -110,7 +118,7 @@ python -m hva_engine.benchmark --seeds 25
 4. **直播输入也是动作源**：弹幕与 Godot、Web 控制台共享同一校验链路。
 5. **用 MVP 数据升级架构**：评价低分对应明确的下一轮改造方向。
 
-详细内容见 [评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
+详细内容见 [评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
 
 ## 弹幕命令
 
@@ -120,7 +128,7 @@ python -m hva_engine.benchmark --seeds 25
 {"match_id":"...", "user":"viewer42", "message":"!move right"}
 ```
 
-支持的 MVP 命令包括 `!move up`、`!attack`、`!accelerate`、`!conserve`、`!pit`、`!evidence`、`!emotion`、`!rebuttal`。生产环境中可在 `DanmakuAdapter` 前增加 Bilibili、抖音、Twitch 或 YouTube 的鉴权/签名适配器，并保留限流、投票聚合和内容安全层。
+支持的 MVP 命令包括 `!move up`、`!attack`、`!accelerate`、`!conserve`、`!pit`、`!evidence`、`!emotion`、`!rebuttal`，以及采访 MOD 的 `!ask identity`、`!ask failure` 等主题选择。生产环境中可在 `DanmakuAdapter` 前增加 Bilibili、抖音、Twitch 或 YouTube 的鉴权/签名适配器，并保留限流、投票聚合和内容安全层。
 
 ## 路线图
 

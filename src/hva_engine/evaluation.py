@@ -164,6 +164,12 @@ class MatchEvaluator:
         agent_types = Counter(event.payload.get("action_type") for event in agent_actions)
         policy_diversity = _clamp(len(agent_types) / max(1, min(4, len(agent_actions))))
         human_likeness, human_likeness_profile = self._human_likeness(decisions, events, agents)
+        mod_specific_profile: dict[str, Any] | None = None
+        if mod.id == "adversarial_interview":
+            mod_specific_profile = self._interview_assessment(decisions, events)
+            human_likeness = _clamp(
+                0.55 * human_likeness + 0.45 * mod_specific_profile["composite"]
+            )
         coordination_events = sum(event.type == "coordination_bonus" for event in events)
         cooperation = (
             _clamp(
@@ -216,6 +222,7 @@ class MatchEvaluator:
             "story_fact_provenance": story_fact_provenance,
             "human_likeness": human_likeness,
             "human_likeness_components": human_likeness_profile,
+            "interview_assessment": mod_specific_profile,
         }
         return {
             "version": "mvp-3",
@@ -224,6 +231,7 @@ class MatchEvaluator:
             "weights": weights,
             "dimensions": dimensions,
             "ai_capability_profile": ai_capability_profile,
+            "mod_specific_profile": mod_specific_profile,
             "evidence": {
                 "player_engagement": "proxy" if humans else "not_applicable",
                 "memory_effectiveness": "influence_proxy; ablation_required",
@@ -345,6 +353,116 @@ class MatchEvaluator:
             + 0.18 * profile["narrative_revelation"]
         )
         return score, profile
+
+    def _interview_assessment(
+        self, decisions: list[GameEvent], events: list[GameEvent]
+    ) -> dict[str, Any]:
+        questions = [event for event in events if event.type == "interview_question"]
+        responses = [event for event in events if event.type == "interview_response"]
+        arc_shifts = [event for event in events if event.type == "character_arc_shift"]
+        story_reveals = [event for event in events if event.type == "story_reveal"]
+        strategies = [str(event.payload.get("strategy")) for event in responses]
+        response_diversity = _clamp(len(set(strategies)) / max(1, min(5, len(strategies))))
+
+        matrices = [
+            event.payload.get("psychological_matrix", {})
+            for event in decisions
+            if event.payload.get("psychological_matrix")
+        ]
+        matrix_keys = ("stress", "frustration", "anger", "fear", "confidence", "morale")
+        ranges = (
+            [
+                max(float(matrix.get(key, 0.0)) for matrix in matrices)
+                - min(float(matrix.get(key, 0.0)) for matrix in matrices)
+                for key in matrix_keys
+            ]
+            if matrices
+            else []
+        )
+        average_range = sum(ranges) / max(1, len(ranges))
+        # A believable arc changes under pressure without becoming pure random volatility.
+        psychological_reactivity = _clamp(1 - abs(average_range - 0.22) / 0.18)
+        pressure_signal_grounding = _clamp(
+            sum(
+                bool(event.payload.get("world_model", {}).get("mod_psychological_signals"))
+                for event in decisions
+            )
+            / max(1, len(decisions))
+        )
+
+        identity_strategies = {
+            "answer_honestly",
+            "admit_uncertainty",
+            "reframe",
+            "invoke_memory",
+        }
+        identity_explanation = _clamp(
+            0.55
+            * sum(strategy in identity_strategies for strategy in strategies)
+            / max(1, len(strategies))
+            + 0.25
+            * sum(event.type == "identity_memory_invoked" for event in events)
+            / max(1, len(responses) / 3)
+            + 0.20 * min(1.0, len(story_reveals) / 3)
+        )
+        provenance = _clamp(
+            sum(bool(event.payload.get("supporting_fact_ids")) for event in story_reveals)
+            / max(1, len(story_reveals))
+        )
+
+        final_arc = (
+            str(responses[-1].payload.get("arc_stage", "guarded")) if responses else "guarded"
+        )
+        resolution = {
+            "integrated": 1.0,
+            "defiant": 0.82,
+            "fractured": 0.68,
+            "opening_up": 0.72,
+            "hardened": 0.58,
+            "unresolved": 0.46,
+            "guarded": 0.25,
+        }.get(final_arc, 0.3)
+        character_arc = _clamp(0.55 * min(1.0, len(arc_shifts) / 2) + 0.45 * resolution)
+        metrics = responses[-1].payload.get("metrics_after", {}) if responses else {}
+        resilience = _clamp(
+            0.28 * float(metrics.get("composure", 0.0)) / 100
+            + 0.26 * float(metrics.get("authenticity", 0.0)) / 100
+            + 0.24 * float(metrics.get("coherence", 0.0)) / 100
+            + 0.22 * float(metrics.get("trust", 0.0)) / 100
+        )
+        question_coverage = _clamp(
+            len({event.payload.get("theme") for event in questions})
+            / max(1, min(6, len(questions)))
+        )
+        components = {
+            "question_coverage": question_coverage,
+            "psychological_reactivity": psychological_reactivity,
+            "pressure_signal_grounding": pressure_signal_grounding,
+            "identity_explanation": identity_explanation,
+            "fact_provenance": provenance,
+            "response_strategy_diversity": response_diversity,
+            "character_arc": character_arc,
+            "resilience": resilience,
+        }
+        composite = _clamp(
+            0.08 * question_coverage
+            + 0.16 * psychological_reactivity
+            + 0.10 * pressure_signal_grounding
+            + 0.16 * identity_explanation
+            + 0.12 * provenance
+            + 0.12 * response_diversity
+            + 0.16 * character_arc
+            + 0.10 * resilience
+        )
+        return {
+            "composite": composite,
+            "components": components,
+            "final_arc": final_arc,
+            "questions": len(questions),
+            "responses": len(responses),
+            "arc_shifts": len(arc_shifts),
+            "story_reveals": len(story_reveals),
+        }
 
     def _score_signals(
         self, action_events: list[GameEvent], players: list[Player], cooperative: bool

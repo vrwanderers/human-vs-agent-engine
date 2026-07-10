@@ -8,7 +8,7 @@ client = TestClient(app)
 def test_health_and_mod_catalog() -> None:
     health = client.get("/health")
     assert health.status_code == 200
-    assert health.json()["mods"] == 4
+    assert health.json()["mods"] == 5
     assert health.json()["fact_store"] == "memory"
     mods = client.get("/api/mods").json()
     assert {mod["id"] for mod in mods} == {
@@ -16,6 +16,7 @@ def test_health_and_mod_catalog() -> None:
         "racing_strategy",
         "debate_arena",
         "crisis_coop",
+        "adversarial_interview",
     }
 
 
@@ -48,3 +49,43 @@ def test_public_fact_graph_exposes_revealed_facts_without_private_identity() -> 
     assert graph["owner_id"] == agent_id
     assert graph["facts"]
     assert all(fact["visibility"] in {"public", "revealed"} for fact in graph["facts"])
+
+
+def test_interview_mod_api_returns_questions_transcript_and_specialized_score() -> None:
+    created = client.post(
+        "/api/matches",
+        json={"mod_id": "adversarial_interview", "human_name": "Interviewer", "seed": 7},
+    )
+    assert created.status_code == 201
+    match = created.json()
+    while match["status"] == "active":
+        assert all(action["type"].startswith("ask_") for action in match["legal_actions"])
+        assert all("prompt" in action["payload"] for action in match["legal_actions"])
+        match = client.post(
+            f"/api/matches/{match['id']}/actions",
+            json={
+                "actor_id": match["human_player_id"],
+                "action": match["legal_actions"][0],
+            },
+        ).json()
+    assert len(match["state"]["transcript"]) == 12
+    evaluation = client.get(f"/api/matches/{match['id']}/evaluation").json()
+    assert evaluation["mod_specific_profile"]["questions"] == 6
+    assert evaluation["mod_specific_profile"]["responses"] == 6
+    assert evaluation["mod_specific_profile"]["composite"] > 0.6
+
+
+def test_interview_question_can_be_selected_by_danmaku_theme() -> None:
+    match = client.post(
+        "/api/matches",
+        json={"mod_id": "adversarial_interview", "human_name": "Live", "seed": 4},
+    ).json()
+    theme = match["legal_actions"][0]["payload"]["theme"]
+    response = client.post(
+        "/api/live/danmaku",
+        json={"match_id": match["id"], "user": "viewer-1", "message": f"!ask {theme}"},
+    )
+    assert response.status_code == 200
+    updated = response.json()
+    assert updated["state"]["used_question_ids"]
+    assert any(event["type"] == "danmaku_received" for event in updated["events"])

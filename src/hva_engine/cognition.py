@@ -270,6 +270,26 @@ class CognitiveState:
     intention_age: int = 0
     surprise: float = 0.0
 
+    def apply_adjustments(self, adjustments: dict[str, float]) -> None:
+        allowed = {
+            "confidence",
+            "morale",
+            "stress",
+            "frustration",
+            "anger",
+            "fear",
+            "arousal",
+            "fatigue",
+            "uncertainty",
+            "social_trust",
+            "surprise",
+        }
+        for name, adjustment in adjustments.items():
+            if name not in allowed:
+                continue
+            current = float(getattr(self, name))
+            setattr(self, name, _clamp(current + float(adjustment)))
+
     def psychology_view(self) -> dict[str, float]:
         return {
             "confidence": round(self.confidence, 3),
@@ -306,6 +326,13 @@ ACTION_TRAITS: dict[str, dict[str, float]] = {
     "coordinate": {"risk": 0.22, "social": 0.92, "control": 0.68},
     "research": {"risk": 0.18, "exploration": 0.94, "patience": 0.72},
     "stabilize": {"risk": 0.30, "social": 0.62, "control": 0.92},
+    "answer_honestly": {"risk": 0.58, "social": 0.72, "control": 0.52},
+    "deflect_with_humor": {"risk": 0.46, "social": 0.68, "shadow": 0.30},
+    "counterattack": {"risk": 0.88, "aggression": 0.94, "shadow": 0.72},
+    "set_boundary": {"risk": 0.24, "patience": 0.70, "control": 0.94},
+    "admit_uncertainty": {"risk": 0.62, "social": 0.82, "exploration": 0.52},
+    "reframe": {"risk": 0.30, "patience": 0.64, "control": 0.84},
+    "invoke_memory": {"risk": 0.68, "social": 0.86, "control": 0.48},
 }
 
 

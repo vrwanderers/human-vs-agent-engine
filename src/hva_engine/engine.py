@@ -21,7 +21,13 @@ from hva_engine.models import (
     MatchView,
     Player,
 )
-from hva_engine.mods import CrisisCoop, DebateArena, RacingStrategy, TacticalDuel
+from hva_engine.mods import (
+    AdversarialInterview,
+    CrisisCoop,
+    DebateArena,
+    RacingStrategy,
+    TacticalDuel,
+)
 from hva_engine.mods.base import GameMod
 
 
@@ -366,6 +372,12 @@ class GameEngine:
 
 def build_default_engine() -> GameEngine:
     engine = GameEngine(build_fact_store_from_env())
-    for mod in (TacticalDuel(), RacingStrategy(), DebateArena(), CrisisCoop()):
+    for mod in (
+        TacticalDuel(),
+        RacingStrategy(),
+        DebateArena(),
+        CrisisCoop(),
+        AdversarialInterview(),
+    ):
         engine.register(mod)
     return engine

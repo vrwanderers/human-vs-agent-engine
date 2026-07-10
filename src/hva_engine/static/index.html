@@ -13,7 +13,7 @@
 <body><main>
   <div class="eyebrow">Evaluation-first strategy runtime</div><h1>Human <span style="color:var(--red)">VS</span> Agent</h1>
   <div class="grid">
-    <section class="panel"><h2>控制台</h2><label>MOD</label><select id="mod" onchange="updateModes()"></select><label>模式</label><select id="mode"></select><label>玩家</label><input id="name" value="Human"><button style="margin-top:14px" onclick="createMatch()">创建对局</button><p id="status"><small>等待创建对局</small></p><div id="actions"></div><h3>五维评价</h3><div id="metrics"></div></section>
+    <section class="panel"><h2>控制台</h2><label>MOD</label><select id="mod" onchange="updateModes()"></select><label>模式</label><select id="mode"></select><label>玩家</label><input id="name" value="Human"><button style="margin-top:14px" onclick="createMatch()">创建对局</button><p id="status"><small>等待创建对局</small></p><div id="actions"></div><h3>六维评价</h3><div id="metrics"></div></section>
     <section class="panel"><h2>状态 / 事件</h2><pre id="state">{}</pre></section>
   </div>
   <p><small>弹幕调试：POST /api/live/danmaku · 实时状态：WS /ws/matches/{id} · OpenAPI：/docs</small></p>
@@ -26,6 +26,6 @@ function updateModes(){const mod=allMods.find(m=>m.id===q('#mod').value);q('#mod
 async function createMatch(){try{match=await api('/api/matches',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mod_id:q('#mod').value,mode:q('#mode').value,human_name:q('#name').value})});render();await metrics()}catch(e){alert(e.message)}}
 async function act(index){const action=match.legal_actions[index];match=await api(`/api/matches/${match.id}/actions`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({actor_id:match.human_player_id,action})});render();await metrics()}
 function render(){q('#status').innerHTML=`<b>${match.status}</b> · ${match.mode} · ${match.id.slice(0,8)} · current ${match.current_player_id||'—'}`;q('#actions').innerHTML=match.legal_actions.map((a,i)=>`<button onclick="act(${i})">${a.type} ${Object.values(a.payload).join(' ')}</button>`).join('');q('#state').textContent=JSON.stringify({state:match.state,scores:match.scores,agent_summaries:match.agent_summaries,recent_events:match.events.slice(-8)},null,2)}
-async function metrics(){const e=await api(`/api/matches/${match.id}/evaluation`);const bars=o=>Object.entries(o).filter(([,v])=>v!==null).map(([k,v])=>`<div class="metric"><span>${k}</span><span class="bar"><i style="width:${v*100}%"></i></span><b>${v.toFixed(2)}</b></div>`).join('');q('#metrics').innerHTML=bars(e.dimensions)+`<p>COMPOSITE <b style="color:var(--cyan)">${e.composite_score.toFixed(3)}</b></p><h4>AI 能力明细</h4>`+bars(e.ai_capability_profile)}
+async function metrics(){const e=await api(`/api/matches/${match.id}/evaluation`);const bars=o=>Object.entries(o).filter(([,v])=>typeof v==='number').map(([k,v])=>`<div class="metric"><span>${k}</span><span class="bar"><i style="width:${v*100}%"></i></span><b>${v.toFixed(2)}</b></div>`).join('');const mod=e.mod_specific_profile?`<h4>MOD 专用评价</h4><pre>${JSON.stringify(e.mod_specific_profile,null,2)}</pre>`:'';q('#metrics').innerHTML=bars(e.dimensions)+`<p>COMPOSITE <b style="color:var(--cyan)">${e.composite_score.toFixed(3)}</b></p><h4>AI 能力明细</h4>`+bars(e.ai_capability_profile)+mod}
 init();
 </script></body></html>
