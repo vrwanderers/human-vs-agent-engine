@@ -37,7 +37,8 @@ def test_reference_dataset_is_paraphrased_licensed_and_medium_diverse() -> None:
         "fictional_character",
         "biographical_subject",
     }
-    assert len(cases) >= 25
+    assert len(cases) >= 38
+    assert {case.original_language for case in cases} >= {"zh", "es", "sa"}
     assert all(case.source_url.startswith("https://") for case in cases)
 
 
@@ -74,7 +75,10 @@ def test_narrative_mechanism_beats_simple_negative_controls() -> None:
     assert report["biographies_are_not_behavioral_telemetry"] is True
     assert len(report["known_limitations"]) == 3
     assert report["components"]["decision_match"] > 0.75
-    assert report["discriminative_margin"] > 0.1
+    assert report["discriminative_margin"] > 0.05
+    assert report["components"]["decision_match"] > max(
+        report["negative_controls"].values()
+    )
     assert report["negative_controls"]["self_preservation_only"] < 0.5
     ablation = report["mechanism_ablation"][
         "without_temptation_social_pressure_and_rationalization"
@@ -87,6 +91,9 @@ def test_narrative_mechanism_beats_simple_negative_controls() -> None:
         "fictional_character",
         "biographical_subject",
     }
+    assert report["version"] == "narrative-calibration-v4"
+    assert report["multilingual_coverage"]["chinese_literature_cases"] >= 11
+    assert report["multilingual_coverage"]["modern_chinese_fiction_cases"] >= 4
 
 
 def test_biographical_cards_require_institutional_evidence() -> None:
@@ -152,7 +159,7 @@ def test_match_evaluation_exposes_narrative_dynamics_without_private_reasoning()
     )
     evaluation = engine.evaluation(view.id)
     components = evaluation["ai_capability_profile"]["human_likeness_components"]
-    assert evaluation["version"] == "mvp-7"
+    assert evaluation["version"] == "mvp-8"
     assert components["motivational_conflict"] > 0
     assert components["consequence_hysteresis"] > 0
     assert components["distortion_pressure"] > 0

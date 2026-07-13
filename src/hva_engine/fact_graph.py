@@ -91,6 +91,10 @@ class AgentFactGraph:
         graph._add_core("identity.aspiration", identity.aspiration)
         graph._add_core("identity.core_wound", identity.core_wound)
         graph._add_core("identity.values", list(identity.values))
+        graph._add_core("identity.motive_weights", identity.motive_weights)
+        graph._add_core("identity.commitment_weights", identity.commitment_weights)
+        if identity.character_card_id:
+            graph._add_core("identity.character_card_id", identity.character_card_id)
         for memory in identity.formative_memories:
             fact = graph._add_core(f"history.formative_memory.{memory.title}", memory.public_view())
             graph.formative_memory_fact_ids[memory.title] = fact.id

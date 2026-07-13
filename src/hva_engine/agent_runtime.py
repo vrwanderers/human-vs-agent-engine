@@ -360,11 +360,6 @@ class AgentBrain:
         narrative_biases = self.narrative_dynamics.action_biases(
             legal, narrative_affordances
         )
-        combined_identity_biases = {
-            action.type: self.identity.action_biases.get(action.type, 0.0)
-            + narrative_biases.get(action.type, 0.0)
-            for action in legal
-        }
         utilities, components = action_utilities(
             legal=legal,
             baseline=baseline_action,
@@ -373,7 +368,7 @@ class AgentBrain:
             profile=self.profile,
             cognition=self.cognition,
             policy=self.behavior_policy,
-            identity_biases=combined_identity_biases,
+            character_state_biases=narrative_biases,
             cooperative="coop" in self.role,
             rng=rng,
         )
@@ -755,23 +750,24 @@ class AgentBrain:
         requested_fact_ids: list[str] | None = None,
     ) -> dict[str, Any] | None:
         memories = {memory.title: memory for memory in self.identity.formative_memories}
+        memory_titles = [memory.title for memory in self.identity.formative_memories]
         thresholds = (
             (
-                "the first costly lesson",
+                memory_titles[0],
                 self.decisions >= 2
                 or self.cognition.stress >= 0.42
                 or self.cognition.frustration >= 0.35,
                 "pressure_or_setback",
             ),
             (
-                "a hard-won success",
+                memory_titles[1],
                 self.decisions >= 4
                 or self.cognition.confidence >= 0.68
                 or self.opponent_model.get("observed_actions", 0) >= 3,
                 "trust_or_pattern_recognition",
             ),
             (
-                "a private promise",
+                memory_titles[2],
                 self.decisions >= 6 or terminal,
                 "commitment_or_finale",
             ),

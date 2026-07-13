@@ -70,12 +70,18 @@ async def health() -> dict[str, object]:
         "fact_store": engine.fact_store.name,
         "agent_runtime": engine.agent_runtime,
         "llm_mods": sorted(engine.llm_mod_ids),
+        "character_cards": len(engine.character_cards.cards),
     }
 
 
 @app.get("/api/mods")
 async def list_mods() -> list[dict[str, object]]:
     return [mod.manifest() for mod in engine.mods.values()]
+
+
+@app.get("/api/character-cards")
+async def list_character_cards() -> list[dict[str, object]]:
+    return engine.character_cards.catalog()
 
 
 @app.post("/api/matches", response_model=MatchView, status_code=201)
@@ -87,6 +93,7 @@ async def create_match(request: CreateMatchRequest) -> MatchView:
             request.seed,
             request.mode,
             agent_tuning=request.agent_tuning,
+            agent_characters=request.agent_characters,
         )
     except EngineError as exc:
         raise _bad_request(exc) from exc

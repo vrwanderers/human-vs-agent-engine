@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from random import Random
 from typing import Any
 
@@ -193,7 +193,9 @@ class AgentIdentity:
     values: tuple[str, ...]
     social_style: str
     formative_memories: tuple[AutobiographicalMemory, ...]
-    action_biases: dict[str, float]
+    motive_weights: dict[str, float] = field(default_factory=dict)
+    commitment_weights: dict[str, float] = field(default_factory=dict)
+    character_card_id: str | None = None
     disclosure: str = "AI-controlled fictional character"
 
     @classmethod
@@ -209,7 +211,6 @@ class AgentIdentity:
                 ),
                 "values": ("foresight", "competence", "measured loyalty"),
                 "style": "quiet, precise, and slow to trust",
-                "biases": {"evidence": 0.12, "research": 0.12, "conserve": 0.08, "pit": 0.08},
             },
             "opportunist": {
                 "background": "A self-made survivor who learned to read shifting alliances early.",
@@ -217,7 +218,6 @@ class AgentIdentity:
                 "core_wound": "Was abandoned by allies when a calculated risk stopped paying off.",
                 "values": ("freedom", "leverage", "adaptability"),
                 "style": "charming, restless, and alert to weakness",
-                "biases": {"accelerate": 0.10, "move": 0.08, "rebuttal": 0.08},
             },
             "guardian": {
                 "background": (
@@ -227,7 +227,6 @@ class AgentIdentity:
                 "core_wound": "Still carries guilt from choosing the mission over one teammate.",
                 "values": ("duty", "trust", "protecting the vulnerable"),
                 "style": "warm, vigilant, and stubborn under pressure",
-                "biases": {"coordinate": 0.14, "stabilize": 0.12, "conserve": 0.06},
             },
             "provocateur": {
                 "background": (
@@ -239,7 +238,6 @@ class AgentIdentity:
                 ),
                 "values": ("impact", "independence", "uncomfortable truth"),
                 "style": "magnetic, combative, and emotionally guarded",
-                "biases": {"attack": 0.11, "emotion": 0.11, "rebuttal": 0.10},
             },
         }
         story = stories[profile.archetype]
@@ -284,7 +282,6 @@ class AgentIdentity:
             values=story["values"],
             social_style=story["style"],
             formative_memories=memories,
-            action_biases=story["biases"],
         )
 
     def private_view(self) -> dict[str, Any]:
@@ -296,6 +293,9 @@ class AgentIdentity:
             "values": list(self.values),
             "social_style": self.social_style,
             "formative_memories": [memory.public_view() for memory in self.formative_memories],
+            "motive_weights": self.motive_weights,
+            "commitment_weights": self.commitment_weights,
+            "character_card_id": self.character_card_id,
             "disclosure": self.disclosure,
         }
 
@@ -307,14 +307,19 @@ class AgentIdentity:
         return {
             "name": self.name,
             "disclosure": self.disclosure,
+            "character_card_id": self.character_card_id,
             "social_style": self.social_style,
             "background": self.background if revealed else "Not yet revealed",
             "values": list(self.values) if revealed else [],
             "core_wound": (
-                self.core_wound if "the first costly lesson" in revealed else "Not yet revealed"
+                self.core_wound
+                if self.formative_memories[0].title in revealed
+                else "Not yet revealed"
             ),
             "aspiration": (
-                self.aspiration if "a private promise" in revealed else "Not yet revealed"
+                self.aspiration
+                if self.formative_memories[-1].title in revealed
+                else "Not yet revealed"
             ),
             "revealed_memories": visible_memories,
             "story_progress": round(len(revealed) / max(1, len(self.formative_memories)), 3),
@@ -412,7 +417,7 @@ def action_utilities(
     profile: CognitiveProfile,
     cognition: CognitiveState,
     policy: RuntimeBehaviorPolicy,
-    identity_biases: dict[str, float],
+    character_state_biases: dict[str, float],
     cooperative: bool,
     rng: Random,
 ) -> tuple[list[float], list[dict[str, float]]]:
@@ -443,7 +448,7 @@ def action_utilities(
             traits.get("shadow", 0.0) * profile.machiavellianism * policy.effective_shadow_intensity
         )
         habit = 0.12 * profile.patience if action.type == last_action else 0.0
-        identity_consistency = identity_biases.get(action.type, 0.0)
+        character_state_fit = character_state_biases.get(action.type, 0.0)
         recovery = (
             traits.get("control", 0.0)
             * (0.6 * cognition.frustration + 0.4 * cognition.stress)
@@ -463,7 +468,7 @@ def action_utilities(
             "aggression_fit": 0.16 * aggression_fit,
             "shadow_fit": 0.10 * shadow_fit,
             "habit": habit,
-            "identity_consistency": identity_consistency,
+            "character_state_fit": character_state_fit,
             "recovery": 0.12 * recovery,
             "morale_push": 0.07 * morale_push,
             "bounded_noise": noise,

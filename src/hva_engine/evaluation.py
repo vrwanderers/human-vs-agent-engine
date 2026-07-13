@@ -55,7 +55,7 @@ def _clamp(value: float) -> float:
 
 
 class MatchEvaluator:
-    """MVP-7 evaluator: adds commitment debt and delayed consequence realization."""
+    """MVP-8 evaluator: adds declarative character-card grounding diagnostics."""
 
     def evaluate(
         self,
@@ -68,6 +68,8 @@ class MatchEvaluator:
     ) -> dict[str, Any]:
         action_events = [event for event in events if event.type == "action_applied"]
         decisions = [event for event in events if event.type == "agent_decision"]
+        created = next((event for event in events if event.type == "match_created"), None)
+        selected_cards = dict(created.payload.get("character_cards", {})) if created else {}
         humans = {p.id for p in players if p.kind == ActorKind.HUMAN}
         agents = {p.id for p in players if p.kind == ActorKind.AGENT}
         human_actions = [event for event in action_events if event.actor_id in humans]
@@ -165,6 +167,33 @@ class MatchEvaluator:
         agent_types = Counter(event.payload.get("action_type") for event in agent_actions)
         policy_diversity = _clamp(len(agent_types) / max(1, min(4, len(agent_actions))))
         human_likeness, human_likeness_profile = self._human_likeness(decisions, events, agents)
+        character_card_profile: dict[str, Any] | None = None
+        if selected_cards:
+            card_decisions = [
+                event for event in decisions if event.actor_id in selected_cards
+            ]
+            grounded = 0
+            for event in card_decisions:
+                selected_id = str(selected_cards[str(event.actor_id)])
+                bare_id = selected_id.removeprefix("custom:")
+                persona_match = (
+                    event.payload.get("persona", {}).get("archetype")
+                    == f"character_card:{bare_id}"
+                )
+                identity_match = (
+                    event.payload.get("identity", {}).get("character_card_id")
+                    == selected_id
+                )
+                grounded += persona_match and identity_match
+            character_card_profile = {
+                "selected_agents": len(selected_cards),
+                "agent_decisions": len(card_decisions),
+                "identity_grounding_rate": _clamp(
+                    grounded / max(1, len(card_decisions))
+                ),
+                "decision_model": created.payload.get("character_decision_model"),
+                "scripted_action_pool": False,
+            }
         mod_specific_profile: dict[str, Any] | None = None
         if mod.id == "adversarial_interview":
             mod_specific_profile = self._interview_assessment(decisions, events)
@@ -224,9 +253,10 @@ class MatchEvaluator:
             "human_likeness": human_likeness,
             "human_likeness_components": human_likeness_profile,
             "interview_assessment": mod_specific_profile,
+            "character_card_grounding": character_card_profile,
         }
         return {
-            "version": "mvp-7",
+            "version": "mvp-8",
             "valid_for_comparison": rules_valid,
             "composite_score": composite,
             "weights": weights,
@@ -241,6 +271,9 @@ class MatchEvaluator:
                 "research_validity": (
                     "architecture-grounded proxy; not evidence that an LLM reproduces humans"
                 ),
+                "character_card_grounding": (
+                    "event provenance check; dramatic fidelity still requires human raters"
+                ),
             },
             "applicability": {
                 "player_engagement": bool(humans),
@@ -248,6 +281,7 @@ class MatchEvaluator:
                 in {MatchMode.HUMAN_VS_AGENT, MatchMode.AGENT_VS_AGENT},
                 "cooperation_quality": "coop" in mode.value,
                 "ai_human_likeness": bool(decisions),
+                "character_card_grounding": bool(selected_cards),
             },
             "sample": {
                 "actions": len(action_events),

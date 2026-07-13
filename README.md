@@ -10,7 +10,8 @@
 - 论文驱动的 Agent 认知循环：四类记忆、证据反思、情绪评价/再评价、情境人格激活、社会信念、持续计划、快慢有限理性与结果复盘
 - 慢变量人物动力学：竞争动机、关系承诺、秘密压力、身份失调、诱惑、社会施压、自我合理化与行动后果会跨回合改变偏好并推动人物弧光
 - 连续困境与延迟代价：MOD 可为合法动作声明价值、关系、承诺、即时收益与延迟风险；选择会形成可修复但不会自动清零的债务，后续回合再结算后果
-- 独立人物参考校准：用 25 个文学、戏剧、电影/剧本元数据和机构传记关键抉择卡检验机制；虚构与传记分轨，均不冒充真人行为遥测
+- 独立人物参考校准：用 38 个文学、戏剧、电影/剧本元数据和机构传记关键抉择案例检验通用机制；其中 11 个中文文学案例、4 个中文近现代小说案例，均不进入运行时动作池
+- 声明式人物卡：可选择 5 张内置人物卡或提交玩家原创卡；卡片只提供身份、经历、人格、动机和承诺，不含固定动作、台词或问题—回答映射
 - 渐进式角色故事揭露：关键回合、压力、受挫、信任和终局会产生 `story_reveal` 事件
 - 连续混合应对：采访中的七类策略是内部行为坐标，每次回答混合 2–4 类策略及情绪强度，而不是传统 NPC 的固定单选招式
 - 受约束的事实图谱：核心身世不可覆盖，自由发挥必须引用事实依据，可变事实保留修订链
@@ -78,6 +79,16 @@ curl -X POST http://127.0.0.1:8000/api/matches \
   -d '{"mod_id":"adversarial_interview","human_name":"Interviewer","seed":7}'
 ```
 
+选择内置人物卡（先用 `GET /api/character-cards` 查看目录）：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/matches \
+  -H 'content-type: application/json' \
+  -d '{"mod_id":"adversarial_interview","seed":19,"agent_characters":[{"card_id":"ah_q"}]}'
+```
+
+人物卡只作为稳定身份先验，实时动作仍由世界状态、私有记忆、心理矩阵、社会信念、人物动力和 MOD 合法动作共同推演。自定义人物卡使用同一 `CharacterCardSpec`，未知字段和 `action_rules` 会被拒绝。
+
 Agent-only 对局会自动运行到终局。响应中的 `agent_summaries` 暴露世界模型、心理矩阵、公开身份片段、叙事进度和公开事实图谱；事件流中的 `agent_decision` 保存可观察的简短理由、置信度与预期效果，但不保存私密思维链。
 
 默认 MVP 使用可复现的启发式 Agent，便于建立评价基线；`hva_engine.llm` 已提供分层上下文、Provider 注册表和严格动作索引解析，可在不改 MOD 规则的前提下替换为真实 LLM。
@@ -94,7 +105,7 @@ export HVA_LLM_MODEL=your-model
 export HVA_LLM_API_KEY=your-secret
 export HVA_LLM_MODS=adversarial_interview
 
-hva-llm-smoke --seed 7 --question-policy most_severe
+hva-llm-smoke --seed 7 --question-policy most_severe --character-card ah_q
 ```
 
 未安装项目脚本时使用 `python -m hva_engine.llm_smoke`。默认不允许 smoke test 静默回退：六次回答必须全部来自真实 LLM，否则命令失败。输出包含公开问答、动作、token usage、心理轨迹、事实提案结果、人物弧光和完整评分，但不包含 API Key、私有提示词或思维链。
@@ -124,7 +135,7 @@ uvicorn hva_engine.api:app --reload
 
 Docker 开发环境可用 `HVA_FACT_STORE=neo4j docker compose --profile neo4j up --build`。详细约束见 [事实图谱](docs/FACT_GRAPH.md)。
 
-运行评分 MVP-7 的多种子镜像基准（对抗模式会交换双方席位）：
+运行评分 MVP-8 的多种子镜像基准（对抗模式会交换双方席位）：
 
 ```bash
 python -m hva_engine.benchmark --seeds 25
@@ -146,7 +157,7 @@ python -m hva_engine.narrative_calibration
 4. **直播输入也是动作源**：弹幕与 Godot、Web 控制台共享同一校验链路。
 5. **用 MVP 数据升级架构**：评价低分对应明确的下一轮改造方向。
 
-详细内容见 [研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[叙事人物决策校准](docs/NARRATIVE_CHARACTER_CALIBRATION.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
+详细内容见 [人物卡](docs/CHARACTER_CARDS.md)、[研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[叙事人物决策校准](docs/NARRATIVE_CHARACTER_CALIBRATION.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
 
 ## 弹幕命令
 

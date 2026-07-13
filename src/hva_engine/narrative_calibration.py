@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
@@ -84,11 +85,19 @@ class NarrativeCase:
     evidence_grade: str
     decision_domain: str
     work_group: str
+    original_language: str
+    cultural_region: str
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> NarrativeCase:
         medium = str(value["medium"])
         source_policy = str(value["source_policy"])
+        language_defaults = {
+            "Les Misérables": "fr",
+            "Crime and Punishment": "ru",
+            "Metropolis": "de",
+            "A Doll's House": "no",
+        }
         source_form_defaults = {
             "play": "play",
             "film": "screen_narrative",
@@ -143,6 +152,10 @@ class NarrativeCase:
             ),
             decision_domain=str(value.get("decision_domain", "identity")),
             work_group=str(value.get("work_group", value["work"])),
+            original_language=str(
+                value.get("original_language", language_defaults.get(str(value["work"]), "en"))
+            ),
+            cultural_region=str(value.get("cultural_region", "unspecified")),
         )
 
 
@@ -187,15 +200,34 @@ def load_reference_cases(path: Path | None = None) -> tuple[dict[str, Any], list
                 encoding="utf-8"
             )
         )
+        multilingual = json.loads(
+            (data_dir / "narrative_calibration_multilingual_v3.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        chinese_modern = json.loads(
+            (data_dir / "narrative_calibration_chinese_modern_v4.json").read_text(
+                encoding="utf-8"
+            )
+        )
         payload = {
             **base,
-            "version": supplement["version"],
+            "version": chinese_modern["version"],
             "dataset_type": "human_authored_character_reference",
-            "description": supplement["description"],
-            "license_note": supplement["license_note"],
+            "description": chinese_modern["description"],
+            "license_note": chinese_modern["license_note"],
             "holdout_case_ids": [],
-            "holdout_work_groups": supplement["holdout_work_groups"],
-            "cases": [*base["cases"], *supplement["cases"]],
+            "holdout_work_groups": [
+                *supplement["holdout_work_groups"],
+                *multilingual["holdout_work_groups"],
+                *chinese_modern["holdout_work_groups"],
+            ],
+            "cases": [
+                *base["cases"],
+                *supplement["cases"],
+                *multilingual["cases"],
+                *chinese_modern["cases"],
+            ],
         }
     cases = [NarrativeCase.from_dict(item) for item in payload["cases"]]
     validate_reference_dataset(payload, cases)
@@ -258,6 +290,12 @@ def validate_reference_dataset(
             raise NarrativeDatasetError(f"Case lacks an HTTPS source: {case.id}")
         if len(case.situation) > 600:
             raise NarrativeDatasetError(f"Case paraphrase is unexpectedly long: {case.id}")
+        if re.fullmatch(r"[a-z]{2,3}(?:-[A-Za-z0-9]+)*", case.original_language) is None:
+            raise NarrativeDatasetError(
+                f"Case has invalid original language tag: {case.id}"
+            )
+        if not case.cultural_region or len(case.cultural_region) > 80:
+            raise NarrativeDatasetError(f"Case has invalid cultural region: {case.id}")
         option_ids = {option.id for option in case.options}
         if len(option_ids) < 2 or case.observed_option not in option_ids:
             raise NarrativeDatasetError(f"Invalid options or ground truth: {case.id}")
@@ -407,6 +445,7 @@ class NarrativeCalibrationEvaluator:
         return {
             "case_id": case.id,
             "work": case.work,
+            "year": case.year,
             "medium": case.medium,
             "character": case.character,
             "source_policy": case.source_policy,
@@ -415,6 +454,8 @@ class NarrativeCalibrationEvaluator:
             "evidence_grade": case.evidence_grade,
             "decision_domain": case.decision_domain,
             "work_group": case.work_group,
+            "original_language": case.original_language,
+            "cultural_region": case.cultural_region,
             "observed_option": case.observed_option,
             "prediction": prediction.public_view(),
             "components": {key: round(value, 3) for key, value in components.items()},
@@ -507,13 +548,13 @@ class NarrativeCalibrationEvaluator:
                 if (selected := [row for row in rows if str(row[field]) == value])
             }
         return {
-            "version": "narrative-calibration-v2",
+            "version": "narrative-calibration-v4",
             "calibration_status": "prototype_not_independently_annotated",
             "dataset_type": "human_authored_character_reference",
             "not_real_human_behavior_data": True,
             "biographies_are_not_behavioral_telemetry": True,
             "known_limitations": [
-                "character cards, labels, and scoring weights are author-designed",
+                "calibration annotations, labels, and scoring weights are author-designed",
                 "fictional and biographical narratives are not behavioral telemetry",
                 "the small suite is a mechanism regression test, not a population benchmark",
             ],
@@ -572,6 +613,27 @@ class NarrativeCalibrationEvaluator:
             "by_reference_class": grouped("reference_class"),
             "by_decision_domain": grouped("decision_domain"),
             "by_evidence_grade": grouped("evidence_grade"),
+            "by_original_language": grouped("original_language"),
+            "by_cultural_region": grouped("cultural_region"),
+            "multilingual_coverage": {
+                "original_languages": len({row["original_language"] for row in rows}),
+                "non_english_play_cases": sum(
+                    row["medium"] == "play"
+                    and row["original_language"] not in {"en", "und"}
+                    for row in rows
+                ),
+                "chinese_literature_cases": sum(
+                    row["cultural_region"] == "China"
+                    and row["medium"] in {"novel", "novella", "play", "short_story"}
+                    for row in rows
+                ),
+                "modern_chinese_fiction_cases": sum(
+                    row["cultural_region"] == "China"
+                    and row["medium"] in {"novel", "novella", "short_story"}
+                    and int(row["year"]) >= 1900
+                    for row in rows
+                ),
+            },
             "decision_distribution": {
                 option: sum(row["prediction"]["option_id"] == option for row in rows)
                 for option in sorted({row["prediction"]["option_id"] for row in rows})

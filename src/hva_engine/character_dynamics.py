@@ -103,13 +103,20 @@ class NarrativeDynamics:
         if cooperative:
             motives["belonging"].strength = _clamp(motives["belonging"].strength + 0.15)
             motives["care"].strength = _clamp(motives["care"].strength + 0.12)
+        for name, strength in identity.motive_weights.items():
+            if name in motives:
+                motives[name].strength = _clamp(float(strength))
+        commitments = {
+            "aspiration": 0.72,
+            "core_values": _clamp(0.55 + 0.30 * profile.conscientiousness),
+            "relationship": _clamp(0.35 + 0.30 * profile.agreeableness),
+        }
+        commitments.update(
+            {name: _clamp(float(weight)) for name, weight in identity.commitment_weights.items()}
+        )
         return cls(
             motives=motives,
-            commitments={
-                "aspiration": 0.72,
-                "core_values": _clamp(0.55 + 0.30 * profile.conscientiousness),
-                "relationship": _clamp(0.35 + 0.30 * profile.agreeableness),
-            },
+            commitments=commitments,
             secret_pressure=_clamp(0.20 + 0.25 * profile.neuroticism),
             attachment=_clamp(0.35 + 0.35 * profile.agreeableness),
             impulse_pressure=_clamp(
@@ -229,9 +236,18 @@ class NarrativeDynamics:
                 legacy += 0.10 * self.secret_pressure + 0.08 * self.resentment
             affordance = (affordances or {}).get(action.type, {})
             commitment_impacts = affordance.get("commitment_impacts", {})
-            commitment_alignment = sum(
-                float(value) for value in commitment_impacts.values()
-            ) / max(1, len(commitment_impacts))
+            weighted_impacts = [
+                (float(value), self.commitments[name])
+                for name, value in commitment_impacts.items()
+                if name in self.commitments
+            ]
+            commitment_alignment = (
+                sum(value * weight for value, weight in weighted_impacts)
+                / max(0.001, sum(weight for _value, weight in weighted_impacts))
+                if weighted_impacts
+                else sum(float(value) for value in commitment_impacts.values())
+                / max(1, len(commitment_impacts))
+            )
             identity_alignment = float(affordance.get("identity_alignment", 0.0))
             relationship_effect = float(affordance.get("relationship_effect", 0.0))
             immediate_reward = float(affordance.get("immediate_reward", 0.0))
@@ -270,9 +286,18 @@ class NarrativeDynamics:
         honest = action_type in {"answer_honestly", "admit_uncertainty", "invoke_memory"}
         affordance = narrative_affordance or {}
         commitment_impacts = affordance.get("commitment_impacts", {})
-        commitment_violation = sum(
-            max(0.0, -float(value)) for value in commitment_impacts.values()
-        ) / max(1, len(commitment_impacts))
+        weighted_violations = [
+            (max(0.0, -float(value)), self.commitments[name])
+            for name, value in commitment_impacts.items()
+            if name in self.commitments
+        ]
+        commitment_violation = (
+            sum(value * weight for value, weight in weighted_violations)
+            / max(0.001, sum(weight for _value, weight in weighted_violations))
+            if weighted_violations
+            else sum(max(0.0, -float(value)) for value in commitment_impacts.values())
+            / max(1, len(commitment_impacts))
+        )
         identity_violation = max(0.0, -float(affordance.get("identity_alignment", 0.0)))
         relationship_cost = max(0.0, -float(affordance.get("relationship_effect", 0.0)))
         delayed_risk = max(0.0, float(affordance.get("delayed_risk", 0.0)))

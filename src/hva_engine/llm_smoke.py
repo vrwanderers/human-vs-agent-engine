@@ -7,7 +7,7 @@ from collections import Counter
 from typing import Any
 
 from hva_engine.engine import build_default_engine
-from hva_engine.models import AgentTuning, ContentMode
+from hva_engine.models import AgentCharacterSelection, AgentTuning, ContentMode
 
 
 def run_real_interview(
@@ -18,6 +18,7 @@ def run_real_interview(
     shadow_intensity: float,
     content_mode: ContentMode,
     allow_fallback: bool,
+    character_card: str | None = None,
 ) -> dict[str, Any]:
     engine = build_default_engine()
     if engine.agent_runtime != "llm":
@@ -33,6 +34,11 @@ def run_real_interview(
             realism=realism,
             shadow_intensity=shadow_intensity,
             content_mode=content_mode,
+        ),
+        agent_characters=(
+            [AgentCharacterSelection(card_id=character_card)]
+            if character_card
+            else []
         ),
     )
     human_turn = 0
@@ -83,6 +89,7 @@ def run_real_interview(
         "seed": seed,
         "provider": engine.llm_decision_client.provider.name,
         "configured_mods": sorted(engine.llm_mod_ids),
+        "character_card": character_card,
         "real_llm_decisions": real_decisions,
         "fallback_decisions": fallback_decisions,
         "usage": dict(usage),
@@ -111,6 +118,10 @@ def main() -> None:
         default=ContentMode.STANDARD.value,
     )
     parser.add_argument("--allow-fallback", action="store_true")
+    parser.add_argument(
+        "--character-card",
+        help="Built-in declarative character card ID from GET /api/character-cards",
+    )
     args = parser.parse_args()
     if os.environ.get("HVA_AGENT_RUNTIME", "").lower() not in {"llm", "hybrid"}:
         parser.error("Set HVA_AGENT_RUNTIME=llm before running this command")
@@ -121,6 +132,7 @@ def main() -> None:
         shadow_intensity=args.shadow,
         content_mode=ContentMode(args.content_mode),
         allow_fallback=args.allow_fallback,
+        character_card=args.character_card,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

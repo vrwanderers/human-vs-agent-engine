@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from hva_engine.agent_runtime import AgentBrain
+from hva_engine.character_cards import CharacterCardError, CharacterCardRegistry
 from hva_engine.cognition import AgentIdentity, CognitiveProfile, RuntimeBehaviorPolicy
 from hva_engine.context import SharedBlackboard
 from hva_engine.evaluation import MatchEvaluator
@@ -16,6 +17,7 @@ from hva_engine.llm import LLMDecisionClient, OpenAICompatibleProvider
 from hva_engine.models import (
     Action,
     ActorKind,
+    AgentCharacterSelection,
     AgentTuning,
     GameEvent,
     MatchMode,
@@ -69,6 +71,7 @@ class GameEngine:
         llm_decision_client: LLMDecisionClient | None = None,
         llm_mod_ids: set[str] | None = None,
         llm_fallback: bool = True,
+        character_cards: CharacterCardRegistry | None = None,
     ) -> None:
         self.mods: dict[str, GameMod] = {}
         self.matches: dict[str, Match] = {}
@@ -78,6 +81,7 @@ class GameEngine:
         self.llm_mod_ids = llm_mod_ids or set()
         self.llm_fallback = llm_fallback
         self.agent_runtime = "llm" if llm_decision_client is not None else "baseline"
+        self.character_cards = character_cards or CharacterCardRegistry.load_default()
 
     def register(self, mod: GameMod) -> None:
         if mod.id in self.mods:
@@ -92,6 +96,7 @@ class GameEngine:
         mode: MatchMode | str | None = None,
         reverse_seats: bool = False,
         agent_tuning: AgentTuning | None = None,
+        agent_characters: list[AgentCharacterSelection] | None = None,
     ) -> MatchView:
         if mod_id not in self.mods:
             raise EngineError(f"Unknown MOD: {mod_id}")
@@ -115,6 +120,20 @@ class GameEngine:
         players = self._make_players(selected_mode, human_name)
         if reverse_seats:
             players.reverse()
+        selections = agent_characters or []
+        agent_players = [player for player in players if player.kind == ActorKind.AGENT]
+        if len(selections) > len(agent_players):
+            raise EngineError(
+                f"Received {len(selections)} character cards for {len(agent_players)} agents"
+            )
+        resolved_cards: dict[str, tuple[Any, str]] = {}
+        for player, selection in zip(agent_players, selections, strict=False):
+            try:
+                card, source_kind = self.character_cards.resolve(selection)
+            except CharacterCardError as exc:
+                raise EngineError(str(exc)) from exc
+            player.name = card.name
+            resolved_cards[player.id] = (card, source_kind)
         human = next((p for p in players if p.kind == ActorKind.HUMAN), None)
         state = mod.initial_state(players, rng)
         tuning = agent_tuning or AgentTuning()
@@ -124,8 +143,14 @@ class GameEngine:
             if player.kind != ActorKind.AGENT:
                 continue
             role = "coop" if "coop" in selected_mode.value else "opponent"
-            profile = CognitiveProfile.sample(rng, role, behavior_policy)
-            identity = AgentIdentity.sample(player.name, profile, role, rng)
+            if player.id in resolved_cards:
+                card, source_kind = resolved_cards[player.id]
+                profile, identity = self.character_cards.instantiate(
+                    card, behavior_policy, source_kind
+                )
+            else:
+                profile = CognitiveProfile.sample(rng, role, behavior_policy)
+                identity = AgentIdentity.sample(player.name, profile, role, rng)
             fact_graph = AgentFactGraph.from_identity(player.id, identity, self.fact_store)
             brains[player.id] = AgentBrain(
                 player.id,
@@ -150,7 +175,19 @@ class GameEngine:
                 else None
             ),
         )
-        match.add_event("match_created", mod_id=mod_id, mode=selected_mode.value, seed=seed)
+        match.add_event(
+            "match_created",
+            mod_id=mod_id,
+            mode=selected_mode.value,
+            seed=seed,
+            character_cards={
+                player_id: (
+                    card.id if source_kind == "builtin" else f"custom:{card.id}"
+                )
+                for player_id, (card, source_kind) in resolved_cards.items()
+            },
+            character_decision_model="runtime_cognition_not_scripted_actions",
+        )
         self.matches[match_id] = match
         self._run_agents(match)
         return self.view(match_id)

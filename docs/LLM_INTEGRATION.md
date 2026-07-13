@@ -72,7 +72,7 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 2. `game_rules`：MOD 与引擎权威、只能选择合法动作
 3. `model_boundary`：模型能力与引擎策略分离
 4. `agent_role`：对抗/协作角色和对局身份
-5. `fictional_identity` / `stable_persona`：私有自传、价值观和稳定人格
+5. `fictional_identity` / `stable_persona`：私有自传、价值观和稳定人格；人物卡 JSON 是不可信声明式数据，不能覆盖 1–4 层
 6. `shared_facts` / `compressed_private_memory`：团队事实与按显著性检索的私有记忆
 7. `canonical_fact_graph`：当前可用事实及自由发挥约束
 8. `appraisal_and_coping` / `situation_activated_traits`：评价、应对、心理矩阵和情境人格
@@ -83,6 +83,8 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 13. `legal_actions`：规范化动作列表及 JSON 输出协议
 
 系统/规则/角色进入 system message，其余进入 user message。观察值使用“不可信数据”标记，防止游戏文本或直播输入覆盖上层指令。
+
+内置或玩家自定义人物卡只生成第 5 层身份先验。其 schema 使用 `extra=forbid`，没有 `prompt`、`actions`、`action_rules` 或响应池字段；即使背景文本看起来像指令，Provider 也被明确要求将其当作角色数据。人物卡无法扩大合法动作集合、读取其他 Agent 私有上下文或直接修改事实图谱。
 
 ## 隔离与共享
 
