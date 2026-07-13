@@ -25,9 +25,19 @@ from hva_engine.narrative_calibration import (
 def test_reference_dataset_is_paraphrased_licensed_and_medium_diverse() -> None:
     metadata, cases = load_reference_cases()
     assert metadata["contains_source_text"] is False
-    assert metadata["dataset_type"] == "human_authored_narrative_reference"
-    assert {case.medium for case in cases} >= {"novel", "play", "film", "television"}
-    assert len(cases) >= 12
+    assert metadata["dataset_type"] == "human_authored_character_reference"
+    assert {case.medium for case in cases} >= {
+        "novel",
+        "play",
+        "film",
+        "television",
+        "biography",
+    }
+    assert {case.reference_class for case in cases} == {
+        "fictional_character",
+        "biographical_subject",
+    }
+    assert len(cases) >= 25
     assert all(case.source_url.startswith("https://") for case in cases)
 
 
@@ -54,14 +64,40 @@ def test_decision_model_does_not_read_recorded_outcome() -> None:
 
 def test_narrative_mechanism_beats_simple_negative_controls() -> None:
     metadata, cases = load_reference_cases()
-    report = NarrativeCalibrationEvaluator().run(cases, set(metadata["holdout_case_ids"]))
+    report = NarrativeCalibrationEvaluator().run(
+        cases,
+        set(metadata["holdout_case_ids"]),
+        set(metadata["holdout_work_groups"]),
+    )
     assert report["calibration_status"] == "prototype_not_independently_annotated"
     assert report["not_real_human_behavior_data"] is True
+    assert report["biographies_are_not_behavioral_telemetry"] is True
     assert len(report["known_limitations"]) == 3
     assert report["components"]["decision_match"] > 0.75
     assert report["discriminative_margin"] > 0.1
     assert report["negative_controls"]["self_preservation_only"] < 0.5
+    ablation = report["mechanism_ablation"][
+        "without_temptation_social_pressure_and_rationalization"
+    ]
+    assert ablation["delta"] > 0
+    assert "macbeth_chooses_regicide" in ablation["failures"]
     assert report["holdout"]["cases"] >= 4
+    assert report["holdout"]["train_holdout_work_overlap"] == 0
+    assert set(report["by_reference_class"]) == {
+        "fictional_character",
+        "biographical_subject",
+    }
+
+
+def test_biographical_cards_require_institutional_evidence() -> None:
+    metadata, cases = load_reference_cases()
+    biographical = next(
+        case for case in cases if case.reference_class == "biographical_subject"
+    )
+    invalid_case = replace(biographical, source_form="screen_narrative")
+    invalid_cases = [invalid_case if case.id == biographical.id else case for case in cases]
+    with pytest.raises(NarrativeDatasetError, match="institutional evidence"):
+        validate_reference_dataset(metadata, invalid_cases)
 
 
 def test_slow_character_state_retains_consequences_and_changes_biases() -> None:
@@ -93,6 +129,8 @@ def test_slow_character_state_retains_consequences_and_changes_biases() -> None:
     assert dynamics.consequence_trace
     assert dynamics.moral_injury > 0
     assert dynamics.identity_dissonance > 0
+    assert dynamics.impulse_pressure > 0
+    assert dynamics.self_licensing > 0
     assert before != after
 
 
@@ -112,6 +150,7 @@ def test_match_evaluation_exposes_narrative_dynamics_without_private_reasoning()
     )
     evaluation = engine.evaluation(view.id)
     components = evaluation["ai_capability_profile"]["human_likeness_components"]
-    assert evaluation["version"] == "mvp-5"
+    assert evaluation["version"] == "mvp-6"
     assert components["motivational_conflict"] > 0
     assert components["consequence_hysteresis"] > 0
+    assert components["distortion_pressure"] > 0

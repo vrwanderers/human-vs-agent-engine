@@ -1,5 +1,5 @@
 {
-  "version": "mvp-5",
+  "version": "mvp-6",
   "weights_by_mode": {
     "human_vs_agent": {"player_engagement": 0.23, "engine_generality": 0.13, "dynamism": 0.17, "virtual_player_rating": 0.12, "ai_opponent_intelligence": 0.20, "ai_human_likeness": 0.15},
     "agent_vs_agent": {"engine_generality": 0.15, "dynamism": 0.23, "virtual_player_rating": 0.15, "ai_opponent_intelligence": 0.32, "ai_human_likeness": 0.15},
@@ -23,16 +23,17 @@
     "opponent_modeling": 0.04,
     "intention_persistence": 0.04,
     "bounded_rationality": 0.05,
-    "narrative_revelation": 0.06,
+    "narrative_revelation": 0.05,
     "memory_retrieval_grounding": 0.06,
     "reflection_evidence": 0.05,
-    "appraisal_emotion_coherence": 0.07,
+    "appraisal_emotion_coherence": 0.06,
     "social_belief_modeling": 0.05,
     "situation_trait_activation": 0.05,
     "plan_persistence_and_replanning": 0.06,
     "expression_internal_gap": 0.06,
-    "motivational_conflict": 0.07,
-    "consequence_hysteresis": 0.07,
-    "identity_dissonance": 0.07
+    "motivational_conflict": 0.06,
+    "consequence_hysteresis": 0.06,
+    "identity_dissonance": 0.05,
+    "distortion_pressure": 0.06
   }
 }

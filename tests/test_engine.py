@@ -119,7 +119,7 @@ def test_agent_only_engagement_is_not_applicable_in_v5() -> None:
     engine = build_default_engine()
     view = engine.create_match("debate_arena", seed=1, mode=MatchMode.AGENT_VS_AGENT)
     evaluation = engine.evaluation(view.id)
-    assert evaluation["version"] == "mvp-5"
+    assert evaluation["version"] == "mvp-6"
     assert evaluation["dimensions"]["player_engagement"] is None
     assert evaluation["valid_for_comparison"] is True
 

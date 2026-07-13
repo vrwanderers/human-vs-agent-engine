@@ -78,7 +78,7 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 8. `appraisal_and_coping` / `situation_activated_traits`：评价、应对、心理矩阵和情境人格
 9. `semantic_reflections` / `persistent_plan`：引用情景证据的反思和跨回合计划
 10. `social_beliefs`：可错的信任、尊重、敌意、真诚度和对手行为信念
-11. `narrative_dynamics`：竞争动机、承诺、秘密压力、身份失调和行动后果遗留
+11. `narrative_dynamics`：竞争动机、承诺、秘密压力、身份失调、冲动压力、社会易感性、自我许可和行动后果遗留
 12. `current_observation` / `deliberation_protocol`：观察、快慢模式与有限理性协议
 13. `legal_actions`：规范化动作列表及 JSON 输出协议
 

@@ -44,6 +44,9 @@ class NarrativeDynamics:
     moral_injury: float = 0.0
     hope: float = 0.5
     attachment: float = 0.45
+    impulse_pressure: float = 0.2
+    social_susceptibility: float = 0.35
+    self_licensing: float = 0.15
     arc_stage: str = "guarded"
     consequence_trace: list[dict[str, Any]] = field(default_factory=list)
 
@@ -104,6 +107,21 @@ class NarrativeDynamics:
             },
             secret_pressure=_clamp(0.20 + 0.25 * profile.neuroticism),
             attachment=_clamp(0.35 + 0.35 * profile.agreeableness),
+            impulse_pressure=_clamp(
+                0.18
+                + 0.32 * profile.neuroticism
+                + 0.18 * profile.extraversion
+                - 0.20 * profile.conscientiousness
+            ),
+            social_susceptibility=_clamp(
+                0.16 + 0.42 * profile.agreeableness + 0.18 * profile.neuroticism
+            ),
+            self_licensing=_clamp(
+                0.12
+                + 0.28 * profile.loss_aversion
+                + 0.16 * profile.extraversion
+                - 0.20 * profile.conscientiousness
+            ),
         )
 
     def update_before_decision(
@@ -132,6 +150,23 @@ class NarrativeDynamics:
             + 0.08 * max(self.shame, self.identity_dissonance)
         )
         self.resentment = _clamp(0.92 * self.resentment + 0.11 * threat * (1 - social_trust))
+        self.impulse_pressure = _clamp(
+            0.84 * self.impulse_pressure
+            + 0.10 * cognition.stress
+            + 0.08 * self.resentment
+            + 0.06 * incongruence
+        )
+        self.social_susceptibility = _clamp(
+            0.90 * self.social_susceptibility
+            + 0.07 * threat
+            + 0.06 * self.motives["belonging"].frustration
+            - 0.05 * social_trust
+        )
+        self.self_licensing = _clamp(
+            0.91 * self.self_licensing
+            + 0.08 * self.resentment
+            + 0.06 * self.motives["status"].frustration
+        )
         self.hope = _clamp(
             0.90 * self.hope
             + 0.08 * appraisal.controllability
@@ -170,13 +205,19 @@ class NarrativeDynamics:
                 + 0.04 * pressures["status"] * status_fit
             )
             legacy = 0.0
+            distortion = (
+                0.06 * self.impulse_pressure * traits.get("aggression", 0.0)
+                + 0.05 * self.impulse_pressure * traits.get("risk", 0.0)
+                + 0.05 * self.social_susceptibility * traits.get("social", 0.0)
+                + 0.05 * self.self_licensing * status_fit
+            )
             if action.type == "counterattack":
                 legacy += 0.13 * self.resentment - 0.10 * self.moral_injury
             if action.type in {"answer_honestly", "admit_uncertainty", "invoke_memory"}:
                 legacy += 0.10 * self.shame + 0.08 * self.identity_dissonance
             if action.type == "set_boundary":
                 legacy += 0.10 * self.secret_pressure + 0.08 * self.resentment
-            biases[action.type] = motive_fit + legacy
+            biases[action.type] = motive_fit + legacy + distortion
         return biases
 
     def record_consequence(
@@ -218,6 +259,18 @@ class NarrativeDynamics:
             + 0.07 * social
             - 0.10 * max(0.0, -score_delta)
         )
+        self.self_licensing = _clamp(
+            0.88 * self.self_licensing
+            + 0.14 * max(0.0, -score_delta)
+            + 0.08 * self.resentment
+            - (0.12 if honest else 0.0)
+        )
+        self.impulse_pressure = _clamp(
+            0.86 * self.impulse_pressure
+            + 0.10 * surprise
+            + 0.08 * max(0.0, -score_delta)
+            - 0.06 * max(0.0, score_delta)
+        )
         for motive in self.motives.values():
             motive.satisfaction = _clamp(
                 0.86 * motive.satisfaction + 0.14 * (0.5 + max(-0.5, min(0.5, score_delta)))
@@ -231,6 +284,8 @@ class NarrativeDynamics:
                 "shame": round(self.shame, 3),
                 "moral_injury": round(self.moral_injury, 3),
                 "hope": round(self.hope, 3),
+                "impulse_pressure": round(self.impulse_pressure, 3),
+                "self_licensing": round(self.self_licensing, 3),
             }
         )
         self.consequence_trace = self.consequence_trace[-16:]
@@ -276,6 +331,9 @@ class NarrativeDynamics:
             "moral_injury": round(self.moral_injury, 3),
             "hope": round(self.hope, 3),
             "attachment": round(self.attachment, 3),
+            "impulse_pressure": round(self.impulse_pressure, 3),
+            "social_susceptibility": round(self.social_susceptibility, 3),
+            "self_licensing": round(self.self_licensing, 3),
             "arc_stage": self.arc_stage,
             "consequence_count": len(self.consequence_trace),
         }

@@ -55,7 +55,7 @@ def _clamp(value: float) -> float:
 
 
 class MatchEvaluator:
-    """MVP-5 evaluator: adds narrative motive conflicts and consequence hysteresis."""
+    """MVP-6 evaluator: adds pressure distortions to slow narrative dynamics."""
 
     def evaluate(
         self,
@@ -226,7 +226,7 @@ class MatchEvaluator:
             "interview_assessment": mod_specific_profile,
         }
         return {
-            "version": "mvp-5",
+            "version": "mvp-6",
             "valid_for_comparison": rules_valid,
             "composite_score": composite,
             "weights": weights,
@@ -283,6 +283,7 @@ class MatchEvaluator:
                 "motivational_conflict": 0.0,
                 "consequence_hysteresis": 0.0,
                 "identity_dissonance": 0.0,
+                "distortion_pressure": 0.0,
             }
             return 0.0, empty
 
@@ -486,6 +487,27 @@ class MatchEvaluator:
             else 0.55 * (1 - abs(mean_dissonance - 0.22) / 0.22)
             + 0.45 * min(1.0, dissonance_range / 0.18)
         )
+        distortion_values = [
+            sum(
+                float(state.get(key, 0.0))
+                for key in (
+                    "impulse_pressure",
+                    "social_susceptibility",
+                    "self_licensing",
+                )
+            )
+            / 3
+            for state in dynamics
+        ]
+        distortion_pressure = _clamp(
+            0.0
+            if not distortion_values
+            else sum(
+                _clamp(1 - abs(value - 0.38) / 0.38)
+                for value in distortion_values
+            )
+            / len(distortion_values)
+        )
 
         profile = {
             "persona_stability": _clamp(persona_stability),
@@ -506,6 +528,7 @@ class MatchEvaluator:
             "motivational_conflict": motivational_conflict,
             "consequence_hysteresis": consequence_hysteresis,
             "identity_dissonance": identity_dissonance,
+            "distortion_pressure": distortion_pressure,
         }
         score = _clamp(
             0.05 * profile["persona_stability"]
@@ -515,17 +538,18 @@ class MatchEvaluator:
             + 0.04 * profile["opponent_modeling"]
             + 0.04 * profile["intention_persistence"]
             + 0.05 * profile["bounded_rationality"]
-            + 0.06 * profile["narrative_revelation"]
+            + 0.05 * profile["narrative_revelation"]
             + 0.06 * profile["memory_retrieval_grounding"]
             + 0.05 * profile["reflection_evidence"]
-            + 0.07 * profile["appraisal_emotion_coherence"]
+            + 0.06 * profile["appraisal_emotion_coherence"]
             + 0.05 * profile["social_belief_modeling"]
             + 0.05 * profile["situation_trait_activation"]
             + 0.06 * profile["plan_persistence_and_replanning"]
             + 0.06 * profile["expression_internal_gap"]
-            + 0.07 * profile["motivational_conflict"]
-            + 0.07 * profile["consequence_hysteresis"]
-            + 0.07 * profile["identity_dissonance"]
+            + 0.06 * profile["motivational_conflict"]
+            + 0.06 * profile["consequence_hysteresis"]
+            + 0.05 * profile["identity_dissonance"]
+            + 0.06 * profile["distortion_pressure"]
         )
         return score, profile
 

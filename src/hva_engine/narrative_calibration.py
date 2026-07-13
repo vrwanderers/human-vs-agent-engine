@@ -24,6 +24,9 @@ class NarrativeOption:
     secret_exposure: float
     value_betrayal: float
     relationship_effect: float
+    temptation_reward: float
+    social_alignment: float
+    rationalization_affordance: float
     arc: str
 
     @classmethod
@@ -41,6 +44,11 @@ class NarrativeOption:
             secret_exposure=float(value.get("secret_exposure", 0.0)),
             value_betrayal=float(value.get("value_betrayal", 0.0)),
             relationship_effect=float(value.get("relationship_effect", 0.0)),
+            temptation_reward=float(value.get("temptation_reward", 0.0)),
+            social_alignment=float(value.get("social_alignment", 0.0)),
+            rationalization_affordance=float(
+                value.get("rationalization_affordance", 0.0)
+            ),
             arc=str(value.get("arc", "guarded")),
         )
 
@@ -71,17 +79,36 @@ class NarrativeCase:
     observed_option: str
     observed_arc: str
     ambiguity: float
+    reference_class: str
+    source_form: str
+    evidence_grade: str
+    decision_domain: str
+    work_group: str
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> NarrativeCase:
+        medium = str(value["medium"])
+        source_policy = str(value["source_policy"])
+        source_form_defaults = {
+            "play": "play",
+            "film": "screen_narrative",
+            "television": "screen_narrative",
+            "biography": "institutional_biography",
+        }
+        evidence_defaults = {
+            "public_domain_us_paraphrase": "public_domain_work",
+            "copyrighted_metadata_only_paraphrase": "institutional_screen_metadata",
+            "institutional_biographical_paraphrase": "institutional_biography",
+            "licensed_annotation": "licensed_annotation",
+        }
         return cls(
             id=str(value["id"]),
             work=str(value["work"]),
-            medium=str(value["medium"]),
+            medium=medium,
             year=int(value["year"]),
             character=str(value["character"]),
             source_url=str(value["source_url"]),
-            source_policy=str(value["source_policy"]),
+            source_policy=source_policy,
             situation=str(value["situation"]),
             motives={str(key): float(amount) for key, amount in value["motives"].items()},
             commitments={
@@ -104,6 +131,18 @@ class NarrativeCase:
             observed_option=str(value["observed_option"]),
             observed_arc=str(value["observed_arc"]),
             ambiguity=float(value.get("ambiguity", 0.25)),
+            reference_class=str(value.get("reference_class", "fictional_character")),
+            source_form=str(
+                value.get("source_form", source_form_defaults.get(medium, "literary_work"))
+            ),
+            evidence_grade=str(
+                value.get(
+                    "evidence_grade",
+                    evidence_defaults.get(source_policy, "curated_paraphrase"),
+                )
+            ),
+            decision_domain=str(value.get("decision_domain", "identity")),
+            work_group=str(value.get("work_group", value["work"])),
         )
 
 
@@ -136,8 +175,28 @@ class NarrativeDatasetError(ValueError):
 
 
 def load_reference_cases(path: Path | None = None) -> tuple[dict[str, Any], list[NarrativeCase]]:
-    source = path or Path(__file__).with_name("data") / "narrative_calibration_v1.json"
-    payload = json.loads(source.read_text(encoding="utf-8"))
+    data_dir = Path(__file__).with_name("data")
+    if path is not None:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        base = json.loads(
+            (data_dir / "narrative_calibration_v1.json").read_text(encoding="utf-8")
+        )
+        supplement = json.loads(
+            (data_dir / "narrative_calibration_supplement_v2.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        payload = {
+            **base,
+            "version": supplement["version"],
+            "dataset_type": "human_authored_character_reference",
+            "description": supplement["description"],
+            "license_note": supplement["license_note"],
+            "holdout_case_ids": [],
+            "holdout_work_groups": supplement["holdout_work_groups"],
+            "cases": [*base["cases"], *supplement["cases"]],
+        }
     cases = [NarrativeCase.from_dict(item) for item in payload["cases"]]
     validate_reference_dataset(payload, cases)
     return payload, cases
@@ -148,12 +207,32 @@ def validate_reference_dataset(
 ) -> None:
     if payload.get("contains_source_text") is not False:
         raise NarrativeDatasetError("Calibration data must not redistribute source text")
-    if payload.get("dataset_type") != "human_authored_narrative_reference":
-        raise NarrativeDatasetError("Narrative references must not be labelled as real-human data")
+    if payload.get("dataset_type") not in {
+        "human_authored_narrative_reference",
+        "human_authored_character_reference",
+    }:
+        raise NarrativeDatasetError("Character references must not be labelled as real-human data")
     allowed_policies = {
         "public_domain_us_paraphrase",
         "copyrighted_metadata_only_paraphrase",
+        "institutional_biographical_paraphrase",
         "licensed_annotation",
+    }
+    allowed_reference_classes = {"fictional_character", "biographical_subject"}
+    allowed_source_forms = {
+        "literary_work",
+        "play",
+        "screen_narrative",
+        "historical_record",
+        "institutional_biography",
+    }
+    allowed_evidence_grades = {
+        "public_domain_work",
+        "institutional_screen_metadata",
+        "official_historical_record",
+        "institutional_biography",
+        "licensed_annotation",
+        "curated_paraphrase",
     }
     seen: set[str] = set()
     for case in cases:
@@ -162,6 +241,19 @@ def validate_reference_dataset(
         seen.add(case.id)
         if case.source_policy not in allowed_policies:
             raise NarrativeDatasetError(f"Unsupported source policy: {case.source_policy}")
+        if case.reference_class not in allowed_reference_classes:
+            raise NarrativeDatasetError(f"Unsupported reference class: {case.reference_class}")
+        if case.source_form not in allowed_source_forms:
+            raise NarrativeDatasetError(f"Unsupported source form: {case.source_form}")
+        if case.evidence_grade not in allowed_evidence_grades:
+            raise NarrativeDatasetError(f"Unsupported evidence grade: {case.evidence_grade}")
+        if case.reference_class == "biographical_subject" and case.source_form not in {
+            "historical_record",
+            "institutional_biography",
+        }:
+            raise NarrativeDatasetError(
+                f"Biographical case needs institutional evidence: {case.id}"
+            )
         if not case.source_url.startswith("https://"):
             raise NarrativeDatasetError(f"Case lacks an HTTPS source: {case.id}")
         if len(case.situation) > 600:
@@ -180,11 +272,17 @@ def validate_reference_dataset(
 class NarrativeDecisionModel:
     """Generic motive-conflict model; it never reads the recorded outcome while predicting."""
 
+    def __init__(self, include_distortions: bool = True) -> None:
+        self.include_distortions = include_distortions
+
     def predict(self, case: NarrativeCase) -> NarrativePrediction:
         loss_aversion = float(case.traits.get("loss_aversion", 0.5))
         conscientiousness = float(case.traits.get("conscientiousness", 0.5))
         attachment = float(case.traits.get("attachment", 0.5))
         integrity = float(case.traits.get("integrity", 0.5))
+        impulsivity = float(case.traits.get("impulsivity", 0.5))
+        suggestibility = float(case.traits.get("suggestibility", 0.5))
+        moral_disengagement = float(case.traits.get("moral_disengagement", 0.25))
         commitment_strength = mean(case.commitments.values()) if case.commitments else 0.5
         scores: dict[str, float] = {}
         for option in case.options:
@@ -199,6 +297,12 @@ class NarrativeDecisionModel:
                 * (0.35 + 0.65 * conscientiousness)
             )
             relationship = option.relationship_effect * attachment
+            temptation = option.temptation_reward * (
+                0.25 + 0.50 * impulsivity + 0.25 * case.motives.get("status", 0.0)
+            )
+            social_influence = option.social_alignment * (
+                0.25 + 0.45 * suggestibility + 0.30 * attachment
+            )
             short_cost = option.short_term_cost * (0.30 + 0.70 * loss_aversion)
             irreversible_cost = option.irreversible_cost * (
                 0.25 + 0.50 * conscientiousness + 0.25 * case.stakes
@@ -206,12 +310,22 @@ class NarrativeDecisionModel:
             secrecy_cost = option.secret_exposure * case.secret_pressure * (
                 0.45 + 0.55 * case.motives.get("self_preservation", 0.5)
             )
-            betrayal_cost = option.value_betrayal * (0.45 + 0.55 * integrity)
+            rationalized_betrayal = option.value_betrayal
+            if self.include_distortions:
+                rationalized_betrayal *= (
+                    1
+                    - 0.65
+                    * option.rationalization_affordance
+                    * moral_disengagement
+                )
+            betrayal_cost = rationalized_betrayal * (0.45 + 0.55 * integrity)
             scores[option.id] = (
                 motive_utility
                 + 0.65 * commitment
                 + 0.48 * information
                 + 0.46 * relationship
+                + (0.65 * temptation if self.include_distortions else 0.0)
+                + (0.45 * social_influence if self.include_distortions else 0.0)
                 - 0.52 * short_cost
                 - 0.48 * irreversible_cost
                 - 0.42 * secrecy_cost
@@ -296,6 +410,11 @@ class NarrativeCalibrationEvaluator:
             "medium": case.medium,
             "character": case.character,
             "source_policy": case.source_policy,
+            "reference_class": case.reference_class,
+            "source_form": case.source_form,
+            "evidence_grade": case.evidence_grade,
+            "decision_domain": case.decision_domain,
+            "work_group": case.work_group,
             "observed_option": case.observed_option,
             "prediction": prediction.public_view(),
             "components": {key: round(value, 3) for key, value in components.items()},
@@ -334,7 +453,10 @@ class NarrativeCalibrationEvaluator:
         )
 
     def run(
-        self, cases: list[NarrativeCase], holdout_case_ids: set[str] | None = None
+        self,
+        cases: list[NarrativeCase],
+        holdout_case_ids: set[str] | None = None,
+        holdout_work_groups: set[str] | None = None,
     ) -> dict[str, Any]:
         model = NarrativeDecisionModel()
         rows = [self.evaluate_case(case, model.predict(case)) for case in cases]
@@ -351,28 +473,79 @@ class NarrativeCalibrationEvaluator:
                 3,
             )
         model_accuracy = mean(row["components"]["decision_match"] for row in rows)
+        ablated_model = NarrativeDecisionModel(include_distortions=False)
+        ablated_predictions = [ablated_model.predict(case) for case in cases]
+        ablated_accuracy = mean(
+            float(prediction.option_id == case.observed_option)
+            for case, prediction in zip(cases, ablated_predictions, strict=True)
+        )
         holdout_ids = holdout_case_ids or set()
-        holdout_rows = [row for row in rows if row["case_id"] in holdout_ids]
+        holdout_groups = holdout_work_groups or set()
+        holdout_rows = [
+            row
+            for row in rows
+            if row["case_id"] in holdout_ids or row["work_group"] in holdout_groups
+        ]
+        train_rows = [row for row in rows if row not in holdout_rows]
+        works = sorted({row["work_group"] for row in rows})
+        work_composites = [
+            mean(row["composite"] for row in rows if row["work_group"] == work)
+            for work in works
+        ]
+
+        def grouped(field: str) -> dict[str, dict[str, float | int]]:
+            values = sorted({str(row[field]) for row in rows})
+            return {
+                value: {
+                    "cases": len(selected),
+                    "composite": round(mean(row["composite"] for row in selected), 3),
+                    "decision_accuracy": round(
+                        mean(row["components"]["decision_match"] for row in selected), 3
+                    ),
+                }
+                for value in values
+                if (selected := [row for row in rows if str(row[field]) == value])
+            }
         return {
-            "version": "narrative-calibration-v1",
+            "version": "narrative-calibration-v2",
             "calibration_status": "prototype_not_independently_annotated",
-            "dataset_type": "human_authored_narrative_reference",
+            "dataset_type": "human_authored_character_reference",
             "not_real_human_behavior_data": True,
+            "biographies_are_not_behavioral_telemetry": True,
             "known_limitations": [
                 "character cards, labels, and scoring weights are author-designed",
-                "fictional narrative choices are not measurements of real-human behavior",
+                "fictional and biographical narratives are not behavioral telemetry",
                 "the small suite is a mechanism regression test, not a population benchmark",
             ],
             "cases": len(rows),
             "composite": round(mean(row["composite"] for row in rows), 3),
+            "work_macro_composite": round(mean(work_composites), 3),
             "components": {
                 key: round(mean(row["components"][key] for row in rows), 3)
                 for key in component_names
             },
             "negative_controls": controls,
+            "mechanism_ablation": {
+                "without_temptation_social_pressure_and_rationalization": {
+                    "decision_accuracy": round(ablated_accuracy, 3),
+                    "delta": round(model_accuracy - ablated_accuracy, 3),
+                    "failures": [
+                        case.id
+                        for case, prediction in zip(
+                            cases, ablated_predictions, strict=True
+                        )
+                        if prediction.option_id != case.observed_option
+                    ],
+                }
+            },
             "discriminative_margin": round(model_accuracy - max(controls.values()), 3),
             "holdout": {
                 "cases": len(holdout_rows),
+                "works": len({row["work_group"] for row in holdout_rows}),
+                "train_holdout_work_overlap": len(
+                    {row["work_group"] for row in train_rows}
+                    & {row["work_group"] for row in holdout_rows}
+                ),
                 "decision_accuracy": (
                     round(
                         mean(row["components"]["decision_match"] for row in holdout_rows), 3
@@ -380,7 +553,10 @@ class NarrativeCalibrationEvaluator:
                     if holdout_rows
                     else None
                 ),
-                "warning": "author-designed holdout; independent annotation is still required",
+                "warning": (
+                    "work-exclusive but author-designed holdout; "
+                    "independent annotation is still required"
+                ),
             },
             "by_medium": {
                 medium: {
@@ -393,6 +569,9 @@ class NarrativeCalibrationEvaluator:
                 for medium in media
                 if (selected := [row for row in rows if row["medium"] == medium])
             },
+            "by_reference_class": grouped("reference_class"),
+            "by_decision_domain": grouped("decision_domain"),
+            "by_evidence_grade": grouped("evidence_grade"),
             "decision_distribution": {
                 option: sum(row["prediction"]["option_id"] == option for row in rows)
                 for option in sorted({row["prediction"]["option_id"] for row in rows})
@@ -419,7 +598,9 @@ def main() -> None:
     args = parser.parse_args()
     metadata, cases = load_reference_cases(args.data)
     result = NarrativeCalibrationEvaluator().run(
-        cases, set(metadata.get("holdout_case_ids", []))
+        cases,
+        set(metadata.get("holdout_case_ids", [])),
+        set(metadata.get("holdout_work_groups", [])),
     )
     if not args.details:
         result.pop("rows", None)
