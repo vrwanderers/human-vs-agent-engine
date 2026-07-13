@@ -1,10 +1,38 @@
 import pytest
 
 from hva_engine.benchmark import run_benchmark
-from hva_engine.engine import EngineError, build_default_engine
+from hva_engine.engine import EngineError, GameEngine, build_default_engine
 from hva_engine.evaluation import MatchEvaluator
+from hva_engine.llm import LLMDecisionClient, LLMResponse
 from hva_engine.models import ActorKind, AgentTuning, ContentMode, GameEvent, MatchMode, Player
 from hva_engine.mods import AdversarialInterview
+
+
+class SyncInterviewProvider:
+    name = "sync-interview-test"
+
+    def __init__(self, broken: bool = False) -> None:
+        self.calls = 0
+        self.broken = broken
+
+    def complete_sync(self, _request):
+        self.calls += 1
+        if self.broken:
+            return LLMResponse("not-json", "sync-test-1", {}, {})
+        proposals = (
+            '[{"subject":"self","predicate":"preference.local",'
+            '"object":{"interview_style":"direct"},"basis_fact_ids":["fact-0001"]}]'
+            if self.calls == 1
+            else "[]"
+        )
+        return LLMResponse(
+            "```json\n"
+            f'{{"action_index":0,"reason":"direct answer","utterance":"真实模型回答 {self.calls}",'
+            f'"fact_proposals":{proposals}}}\n```',
+            "sync-test-1",
+            {"prompt_tokens": 100, "completion_tokens": 30, "total_tokens": 130},
+            {},
+        )
 
 
 @pytest.mark.parametrize("mod_id", ["tactical_duel", "racing_strategy", "debate_arena"])
@@ -279,6 +307,49 @@ def test_interview_score_rejects_flat_repetitive_guarded_agent() -> None:
     assert assessment["components"]["identity_explanation"] == 0.0
     assert assessment["components"]["fact_provenance"] == 0.0
     assert assessment["composite"] < 0.3
+
+
+def test_llm_runtime_controls_legal_interview_action_utterance_and_fact_proposal() -> None:
+    provider = SyncInterviewProvider()
+    engine = GameEngine(
+        llm_decision_client=LLMDecisionClient(provider),
+        llm_mod_ids={"adversarial_interview"},
+    )
+    engine.register(AdversarialInterview())
+    view = engine.create_match("adversarial_interview", seed=3)
+    while view.status == "active":
+        view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
+    assert provider.calls == 6
+    subject_lines = [
+        item["text"] for item in view.state["transcript"] if item["speaker"] == "subject"
+    ]
+    assert subject_lines == [f"真实模型回答 {index}" for index in range(1, 7)]
+    decisions = [event for event in view.events if event.type == "agent_decision"]
+    assert all(event.payload["decision_source"] == "llm" for event in decisions)
+    assert all(event.payload["llm"]["model"] == "sync-test-1" for event in decisions)
+    assert decisions[0].payload["llm"]["fact_proposals"]["accepted"]
+    applied = [
+        event
+        for event in view.events
+        if event.type == "action_applied" and event.actor_id != view.human_player_id
+    ]
+    assert all(event.payload["source"] == "llm_agent" for event in applied)
+    assert engine.evaluation(view.id)["valid_for_comparison"] is True
+
+
+def test_llm_runtime_falls_back_without_breaking_the_match() -> None:
+    provider = SyncInterviewProvider(broken=True)
+    engine = GameEngine(
+        llm_decision_client=LLMDecisionClient(provider),
+        llm_mod_ids={"adversarial_interview"},
+        llm_fallback=True,
+    )
+    engine.register(AdversarialInterview())
+    view = engine.create_match("adversarial_interview", seed=4)
+    view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
+    decision = next(event for event in view.events if event.type == "agent_decision")
+    assert decision.payload["decision_source"] == "baseline"
+    assert decision.payload["llm_error"]["type"] == "ValueError"
 
 
 def test_rules_compliance_is_a_scoring_gate() -> None:

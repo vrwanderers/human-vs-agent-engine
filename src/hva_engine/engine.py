@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from random import Random
 from typing import Any
@@ -11,6 +12,7 @@ from hva_engine.context import SharedBlackboard
 from hva_engine.evaluation import MatchEvaluator
 from hva_engine.fact_graph import AgentFactGraph
 from hva_engine.fact_store import FactStore, InMemoryFactStore, build_fact_store_from_env
+from hva_engine.llm import LLMDecisionClient, OpenAICompatibleProvider
 from hva_engine.models import (
     Action,
     ActorKind,
@@ -61,11 +63,21 @@ class Match:
 
 
 class GameEngine:
-    def __init__(self, fact_store: FactStore | None = None) -> None:
+    def __init__(
+        self,
+        fact_store: FactStore | None = None,
+        llm_decision_client: LLMDecisionClient | None = None,
+        llm_mod_ids: set[str] | None = None,
+        llm_fallback: bool = True,
+    ) -> None:
         self.mods: dict[str, GameMod] = {}
         self.matches: dict[str, Match] = {}
         self.evaluator = MatchEvaluator()
         self.fact_store = fact_store or InMemoryFactStore()
+        self.llm_decision_client = llm_decision_client
+        self.llm_mod_ids = llm_mod_ids or set()
+        self.llm_fallback = llm_fallback
+        self.agent_runtime = "llm" if llm_decision_client is not None else "baseline"
 
     def register(self, mod: GameMod) -> None:
         if mod.id in self.mods:
@@ -234,14 +246,37 @@ class GameEngine:
                 match.id,
                 shared_facts,
             )
-            action, trace = brain.decide(match.mod, match.state, legal, match.rng)
+            use_llm = self.llm_decision_client if match.mod.id in self.llm_mod_ids else None
+            action, trace = brain.decide(
+                match.mod,
+                match.state,
+                legal,
+                match.rng,
+                decision_client=use_llm,
+                llm_fallback=self.llm_fallback,
+            )
             if action not in legal:
                 raise EngineError("Agent policy returned an illegal action")
             score_before = match.mod.scores(match.state).get(actor_id, 0.0)
             decision_event = match.add_event(
                 "agent_decision", actor_id, action_type=action.type, **trace
             )
-            emitted = self._apply(match, actor_id, action, source="baseline_agent")
+            applied_action = action
+            if trace.get("utterance"):
+                applied_action = action.model_copy(
+                    update={
+                        "payload": {
+                            **action.payload,
+                            "utterance": str(trace["utterance"]),
+                        }
+                    }
+                )
+            emitted = self._apply(
+                match,
+                actor_id,
+                applied_action,
+                source="llm_agent" if trace["decision_source"] == "llm" else "baseline_agent",
+            )
             expected = set(trace["prediction"]["expected_events"])
             actual = {item["type"] for item in emitted}
             decision_event.payload["prediction_verified"] = bool(expected) and bool(
@@ -371,7 +406,27 @@ class GameEngine:
 
 
 def build_default_engine() -> GameEngine:
-    engine = GameEngine(build_fact_store_from_env())
+    runtime = os.environ.get("HVA_AGENT_RUNTIME", "baseline").strip().lower()
+    decision_client: LLMDecisionClient | None = None
+    llm_mod_ids: set[str] = set()
+    if runtime in {"llm", "hybrid"}:
+        provider = OpenAICompatibleProvider.from_env()
+        decision_client = LLMDecisionClient(
+            provider,
+            temperature=float(os.environ.get("HVA_LLM_TEMPERATURE", "0.75")),
+            max_tokens=int(os.environ.get("HVA_LLM_MAX_TOKENS", "900")),
+        )
+        llm_mod_ids = {
+            value.strip()
+            for value in os.environ.get("HVA_LLM_MODS", "adversarial_interview").split(",")
+            if value.strip()
+        }
+    engine = GameEngine(
+        build_fact_store_from_env(),
+        llm_decision_client=decision_client,
+        llm_mod_ids=llm_mod_ids,
+        llm_fallback=os.environ.get("HVA_LLM_FALLBACK", "true").lower() not in {"0", "false", "no"},
+    )
     for mod in (
         TacticalDuel(),
         RacingStrategy(),

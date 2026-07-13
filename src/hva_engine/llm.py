@@ -31,6 +31,15 @@ class LLMResponse:
     raw: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class LLMDecisionResult:
+    action_index: int
+    reason: str
+    utterance: str | None
+    fact_proposals: list[dict[str, Any]]
+    response: LLMResponse
+
+
 class LLMProvider(Protocol):
     name: str
 
@@ -77,9 +86,35 @@ class OpenAICompatibleProvider:
         )
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        headers = self._headers()
+        payload = self._payload(request)
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/chat/completions", headers=headers, json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
+        return self._parse_response(data)
+
+    def complete_sync(self, request: LLMRequest) -> LLMResponse:
+        """Synchronous debug-runtime path; production servers should use async orchestration."""
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.post(
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=self._payload(request),
+            )
+            response.raise_for_status()
+            data = response.json()
+        return self._parse_response(data)
+
+    def _headers(self) -> dict[str, str]:
         headers = {"content-type": "application/json", **self.extra_headers}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _payload(self, request: LLMRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": request.model or self.model,
             "messages": [message.__dict__ for message in request.messages],
@@ -88,16 +123,17 @@ class OpenAICompatibleProvider:
         }
         if request.response_format and self.supports_response_format:
             payload["response_format"] = request.response_format
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions", headers=headers, json=payload
-            )
-            response.raise_for_status()
-            data = response.json()
+        return payload
+
+    def _parse_response(self, data: dict[str, Any]) -> LLMResponse:
         return LLMResponse(
             content=data["choices"][0]["message"]["content"],
             model=data.get("model"),
-            usage={key: int(value) for key, value in data.get("usage", {}).items()},
+            usage={
+                key: int(value)
+                for key, value in data.get("usage", {}).items()
+                if isinstance(value, (int, float))
+            },
             raw=data,
         )
 
@@ -124,8 +160,16 @@ class ProviderRegistry:
 class LLMDecisionClient:
     """Turns a layered prompt into a rule-constrained action selection."""
 
-    def __init__(self, provider: LLMProvider) -> None:
+    def __init__(
+        self,
+        provider: LLMProvider,
+        *,
+        temperature: float = 0.65,
+        max_tokens: int = 700,
+    ) -> None:
         self.provider = provider
+        self.temperature = temperature
+        self.max_tokens = max_tokens
 
     async def choose_action(
         self, messages: list[LLMMessage], legal_actions: list[dict[str, Any]]
@@ -136,9 +180,36 @@ class LLMDecisionClient:
     async def choose_action_and_facts(
         self, messages: list[LLMMessage], legal_actions: list[dict[str, Any]]
     ) -> tuple[int, list[dict[str, Any]], LLMResponse]:
-        response = await self.provider.complete(LLMRequest(messages=messages))
+        result = await self.choose_structured(messages, legal_actions)
+        return result.action_index, result.fact_proposals, result.response
+
+    async def choose_structured(
+        self, messages: list[LLMMessage], legal_actions: list[dict[str, Any]]
+    ) -> LLMDecisionResult:
+        response = await self.provider.complete(self._request(messages))
+        return self._parse_decision(response, legal_actions)
+
+    def choose_structured_sync(
+        self, messages: list[LLMMessage], legal_actions: list[dict[str, Any]]
+    ) -> LLMDecisionResult:
+        complete_sync = getattr(self.provider, "complete_sync", None)
+        if complete_sync is None:
+            raise TypeError("Configured LLM provider does not implement complete_sync")
+        response = complete_sync(self._request(messages))
+        return self._parse_decision(response, legal_actions)
+
+    def _request(self, messages: list[LLMMessage]) -> LLMRequest:
+        return LLMRequest(
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+
+    def _parse_decision(
+        self, response: LLMResponse, legal_actions: list[dict[str, Any]]
+    ) -> LLMDecisionResult:
         try:
-            choice = json.loads(response.content)
+            choice = json.loads(self._extract_json(response.content))
             index = int(choice["action_index"])
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             raise ValueError("LLM must return JSON with an integer action_index") from exc
@@ -156,4 +227,18 @@ class LLMDecisionClient:
                 )
             if not isinstance(proposal["basis_fact_ids"], list):
                 raise ValueError("basis_fact_ids must be a list")
-        return index, proposals, response
+        reason = str(choice.get("reason", ""))[:500]
+        utterance_value = choice.get("utterance")
+        utterance = str(utterance_value).strip()[:1_600] if utterance_value else None
+        return LLMDecisionResult(index, reason, utterance, proposals, response)
+
+    def _extract_json(self, content: str) -> str:
+        text = content.strip()
+        if text.startswith("```"):
+            first_newline = text.find("\n")
+            text = text[first_newline + 1 :] if first_newline >= 0 else text
+            if text.endswith("```"):
+                text = text[:-3]
+        start = text.find("{")
+        end = text.rfind("}")
+        return text[start : end + 1] if start >= 0 and end >= start else text

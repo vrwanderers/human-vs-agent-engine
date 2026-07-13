@@ -23,6 +23,8 @@ Agent 的回答策略：
 | 重构问题 | 一致性、镇定 | 情感开放有限 |
 | 引用记忆 | 身份解释、信任、故事揭露 | 脆弱暴露 |
 
+默认基线使用受控模板生成台词。启用 `HVA_AGENT_RUNTIME=llm` 后，真实模型在分层上下文中选择上述合法策略，并生成公开 `utterance`。MOD 只消费已经校验过的策略；模型台词不会直接修改压力、信任或人物弧光数值。
+
 ## 双层心理状态
 
 MOD 状态记录 `pressure / composure / authenticity / trust / coherence / vulnerability / defiance`。同时，问题强度和主题通过 `agent_psychological_signals` 进入引擎通用心理矩阵，改变压力、沮丧、愤怒、恐惧、唤醒、信心、士气和社会信任。

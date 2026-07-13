@@ -14,9 +14,41 @@ registry = ProviderRegistry()
 registry.register(provider)
 ```
 
-Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接受动作索引、简短可观察理由和最多五条事实提案，并再次检查动作索引。事实提案仍要经过 `AgentFactGraph` 的谓词白名单、依据、冲突和修订校验。LLM、启发式策略、回放策略都不能越过引擎规则层。
+Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接受动作索引、简短可观察理由、可公开角色台词和最多五条事实提案，并再次检查动作索引。事实提案仍要经过 `AgentFactGraph` 的谓词白名单、依据、冲突和修订校验。采访台词可以进入公开 transcript，但不能改变动作类型或规则数值。LLM、启发式策略、回放策略都不能越过引擎规则层。
 
 不支持 `response_format` 的本地或 unrestricted fictional-style Provider，可设置 `HVA_LLM_SUPPORTS_RESPONSE_FORMAT=false`。这只改变 Provider 请求格式，不会降低动作、事实、隐私或真实世界伤害边界。
+
+调试后端提供同步 `chat/completions` 调用路径，便于现有同步引擎运行真实模型；生产部署仍应把远程推理迁移到异步任务/隔离进程，避免阻塞 FastAPI worker。
+
+## 真实模型运行
+
+设置：
+
+- `HVA_AGENT_RUNTIME=llm`
+- `HVA_LLM_BASE_URL / HVA_LLM_MODEL / HVA_LLM_API_KEY`
+- `HVA_LLM_MODS=adversarial_interview`，限制哪些 MOD 使用远程模型
+- `HVA_LLM_TEMPERATURE / HVA_LLM_MAX_TOKENS`
+- `HVA_LLM_FALLBACK=false`，严格实验中禁止失败后使用基线 Agent
+
+运行 `hva-llm-smoke` 会完成六轮采访。每次决策事件记录 Provider、模型、usage、事实提案接受/拒绝结果和公开台词；不会保存原始 Provider 响应、私有思维链或密钥。
+
+结构化输出协议：
+
+```json
+{
+  "action_index": 0,
+  "reason": "brief observable summary",
+  "utterance": "public in-character answer",
+  "fact_proposals": [
+    {
+      "subject": "self",
+      "predicate": "belief.interpretation",
+      "object": {"summary": "..."},
+      "basis_fact_ids": ["fact-0001"]
+    }
+  ]
+}
+```
 
 ## 提示词分层
 

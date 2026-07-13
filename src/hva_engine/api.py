@@ -68,6 +68,8 @@ async def health() -> dict[str, object]:
         "mods": len(engine.mods),
         "matches": len(engine.matches),
         "fact_store": engine.fact_store.name,
+        "agent_runtime": engine.agent_runtime,
+        "llm_mods": sorted(engine.llm_mod_ids),
     }
 
 

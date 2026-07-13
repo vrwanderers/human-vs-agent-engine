@@ -261,7 +261,8 @@ class AdversarialInterview(GameMod):
             scaled = delta * (0.85 + severity * 0.2) + noise
             state[key] = self._clamp(state[key] + scaled)
         state["response_counts"][action.type] = state["response_counts"].get(action.type, 0) + 1
-        answer = self._response_text(action.type, question)
+        answer = str(action.payload.get("utterance") or self._response_text(action.type, question))
+        answer = " ".join(answer.split())[:1_600]
         state["transcript"].append(
             {
                 "turn": state["turn"],

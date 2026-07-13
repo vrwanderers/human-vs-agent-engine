@@ -135,6 +135,7 @@ class ContextComposer:
         output_contract = (
             '\nReturn JSON only: {"action_index": <integer>, '
             '"reason": "brief observable summary", '
+            '"utterance": "optional in-character public response, never private reasoning", '
             '"fact_proposals": [{"subject": "...", "predicate": "...", "object": {}, '
             '"basis_fact_ids": ["fact-..."]}]}'
         )

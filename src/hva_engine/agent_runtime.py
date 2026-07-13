@@ -14,7 +14,8 @@ from hva_engine.cognition import (
     bounded_choice,
 )
 from hva_engine.context import ContextComposer, ContextPacket, SharedFact
-from hva_engine.fact_graph import AgentFactGraph
+from hva_engine.fact_graph import AgentFactGraph, FactGraphError
+from hva_engine.llm import LLMDecisionClient
 from hva_engine.models import Action, GameEvent
 from hva_engine.mods.base import GameMod
 
@@ -204,6 +205,8 @@ class AgentBrain:
         state: dict[str, Any],
         legal: list[Action],
         rng: Random,
+        decision_client: LLMDecisionClient | None = None,
+        llm_fallback: bool = True,
     ) -> tuple[Action, dict[str, Any]]:
         if not legal:
             raise ValueError("Agent cannot decide without legal actions")
@@ -242,7 +245,24 @@ class AgentBrain:
             cooperative="coop" in self.role,
             rng=rng,
         )
-        choice_index = bounded_choice(utilities, self.behavior_policy.realism, rng)
+        llm_decision = None
+        llm_error: dict[str, str] | None = None
+        fact_proposal_result: dict[str, Any] | None = None
+        if decision_client is not None:
+            try:
+                llm_decision = decision_client.choose_structured_sync(
+                    self.last_context.messages,
+                    [action.model_dump() for action in legal],
+                )
+                choice_index = llm_decision.action_index
+                fact_proposal_result = self.apply_fact_proposals(llm_decision.fact_proposals)
+            except Exception as exc:
+                if not llm_fallback:
+                    raise
+                llm_error = {"type": type(exc).__name__, "message": str(exc)[:500]}
+                choice_index = bounded_choice(utilities, self.behavior_policy.realism, rng)
+        else:
+            choice_index = bounded_choice(utilities, self.behavior_policy.realism, rng)
         action = legal[choice_index]
         best_index = max(range(len(utilities)), key=utilities.__getitem__)
         regret = max(0.0, utilities[best_index] - utilities[choice_index])
@@ -265,12 +285,32 @@ class AgentBrain:
             ),
         )
         prediction = self._prediction(mod, action)
+        default_rationale = (
+            f"Pursue {self.cognition.intention}; chose {action.type} from "
+            f"{len(legal)} rule-valid options"
+        )
         trace = {
-            "policy": f"{mod.id}.baseline",
-            "rationale": (
-                f"Pursue {self.cognition.intention}; chose {action.type} from "
-                f"{len(legal)} rule-valid options"
+            "policy": (
+                f"llm:{decision_client.provider.name}"
+                if llm_decision is not None and decision_client is not None
+                else f"{mod.id}.baseline"
             ),
+            "decision_source": "llm" if llm_decision is not None else "baseline",
+            "rationale": llm_decision.reason
+            if llm_decision and llm_decision.reason
+            else default_rationale,
+            "utterance": llm_decision.utterance if llm_decision else None,
+            "llm": (
+                {
+                    "provider": decision_client.provider.name,
+                    "model": llm_decision.response.model,
+                    "usage": llm_decision.response.usage,
+                    "fact_proposals": fact_proposal_result,
+                }
+                if llm_decision is not None and decision_client is not None
+                else None
+            ),
+            "llm_error": llm_error,
             "confidence": round(confidence, 3),
             "baseline_action": baseline_action.type,
             "memory_used": memory_used,
@@ -309,6 +349,33 @@ class AgentBrain:
         }
         self.decisions += 1
         return action, trace
+
+    def apply_fact_proposals(self, proposals: list[dict[str, Any]]) -> dict[str, Any]:
+        accepted: list[str] = []
+        rejected: list[dict[str, str]] = []
+        for proposal in proposals:
+            try:
+                fact = self.fact_graph.propose(
+                    subject=str(proposal["subject"]),
+                    predicate=str(proposal["predicate"]),
+                    value=proposal["object"],
+                    basis_fact_ids=[str(value) for value in proposal["basis_fact_ids"]],
+                    confidence=float(proposal.get("confidence", 0.65)),
+                    supersedes_fact_id=(
+                        str(proposal["supersedes_fact_id"])
+                        if proposal.get("supersedes_fact_id")
+                        else None
+                    ),
+                )
+                accepted.append(fact.id)
+            except (FactGraphError, KeyError, TypeError, ValueError) as exc:
+                rejected.append(
+                    {
+                        "predicate": str(proposal.get("predicate", "unknown")),
+                        "reason": str(exc)[:300],
+                    }
+                )
+        return {"submitted": len(proposals), "accepted": accepted, "rejected": rejected}
 
     def remember(
         self,

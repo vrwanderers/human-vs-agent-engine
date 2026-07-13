@@ -10,6 +10,8 @@ def test_health_and_mod_catalog() -> None:
     assert health.status_code == 200
     assert health.json()["mods"] == 5
     assert health.json()["fact_store"] == "memory"
+    assert health.json()["agent_runtime"] == "baseline"
+    assert health.json()["llm_mods"] == []
     mods = client.get("/api/mods").json()
     assert {mod["id"] for mod in mods} == {
         "tactical_duel",
