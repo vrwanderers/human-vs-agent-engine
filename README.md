@@ -112,6 +112,16 @@ hva-llm-smoke --seed 7 --question-policy most_severe --character-card ah_q
 
 未安装项目脚本时使用 `python -m hva_engine.llm_smoke`。默认不允许 smoke test 静默回退：六次回答必须全部来自真实 LLM，否则命令失败。输出包含公开问答、动作、token usage、心理轨迹、事实提案结果、人物弧光和完整评分，但不包含 API Key、私有提示词或思维链。
 
+需要逐步检查每次决策时，可使用严格的 stdin/stdout 调试桥：
+
+```bash
+hva-llm-step-debug --seed 19 --question-policy most_severe \
+  --character-card ah_q --context-output full \
+  --report /tmp/hva-step-report.json
+```
+
+每轮会先冻结并输出该 Agent 的私有快照、合法动作和可选完整分层提示，然后停下来等待一行 LLM JSON。格式错误会在当前步返回 `llm_decision_rejected` 并允许重试；回退策略始终关闭。此命令及生成的报告含私有调试数据，只能在可信开发环境使用。
+
 随后使用响应中的 `human_player_id` 提交动作：
 
 ```bash

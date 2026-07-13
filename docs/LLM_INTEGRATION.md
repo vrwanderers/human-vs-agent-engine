@@ -32,6 +32,17 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 
 运行 `hva-llm-smoke` 会完成六轮采访。每次决策事件记录 Provider、模型、usage、事实提案接受/拒绝结果和公开台词；不会保存原始 Provider 响应、私有思维链或密钥。
 
+### 单步人工 LLM 桥
+
+需要逐步检查“观察 → 私有上下文 → 模型 JSON → 引擎约束 → 规则结果”时，可运行：
+
+```bash
+hva-llm-step-debug --character-card ah_q --content-mode mature_fiction \
+  --context-output full --report /tmp/hva-step-report.json
+```
+
+命令每轮先向 stdout 输出一行 `llm_decision_request`，其中包含冻结的心理矩阵、评价、计划、检索记忆、事实图谱、合法动作、影响可供性及可选完整提示；随后暂停，只从 stdin 接受一行 JSON。收到后输出 `llm_decision_received`，再由正常 `LLMDecisionClient`、战略影响约束、事实防火墙和 MOD 规则执行，最后输出 `step_result`。六轮均要求外部 LLM 回答，回退固定关闭。调试桥会先校验顶层结构和事实提案字段；格式错误会输出 `llm_decision_rejected`，停留在当前步等待重试，不推进世界状态。例如事实提案必须使用公开契约字段 `subject`、`object`，不能使用图存储内部字段名。该模式会显示私有调试数据，只能在可信开发环境使用；生成的 report 也应按私有测试工件管理。
+
 结构化输出协议：
 
 ```json
