@@ -4,6 +4,7 @@ import math
 from collections import deque
 from dataclasses import dataclass, field
 from random import Random
+from time import perf_counter
 from typing import Any
 
 from hva_engine.character_dynamics import NarrativeDynamics
@@ -419,6 +420,7 @@ class AgentBrain:
         fact_proposal_result: dict[str, Any] | None = None
         influence_intent: InfluenceIntent | None = None
         if decision_client is not None:
+            llm_started = perf_counter()
             try:
                 llm_decision = decision_client.choose_structured_sync(
                     self.last_context.messages,
@@ -444,7 +446,15 @@ class AgentBrain:
             except Exception as exc:
                 if not llm_fallback:
                     raise
-                llm_error = {"type": type(exc).__name__, "message": str(exc)[:500]}
+                llm_error = {
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:500],
+                    "provider": decision_client.provider.name,
+                    "latency_ms": round((perf_counter() - llm_started) * 1_000, 3),
+                    "context_id": self.last_context.context_id,
+                    "context_sha256": self.last_context.content_sha256,
+                    "status": "fallback",
+                }
                 llm_decision = None
                 choice_index = bounded_choice(
                     utilities,
@@ -546,6 +556,7 @@ class AgentBrain:
                     "provider": decision_client.provider.name,
                     "model": llm_decision.response.model,
                     "usage": llm_decision.response.usage,
+                    "telemetry": llm_decision.response.telemetry,
                     "context_id": self.last_context.context_id,
                     "context_sha256": self.last_context.content_sha256,
                     "context_owner_agent_id": self.last_context.owner_agent_id,
@@ -933,6 +944,25 @@ class AgentBrain:
             },
         }
 
+    def public_summary(self) -> dict[str, Any]:
+        """Only information that a spectator or opponent may observe."""
+
+        return {
+            "role": self.role,
+            "decisions": self.decisions,
+            "identity": self.identity.public_view(self._revealed_story_titles),
+            "fact_graph": self.fact_graph.public_view(),
+            "narrative": {
+                "revealed_beats": len(self._revealed_story_titles),
+                "total_beats": len(self.identity.formative_memories),
+                "progress": round(
+                    len(self._revealed_story_titles)
+                    / max(1, len(self.identity.formative_memories)),
+                    3,
+                ),
+            },
+        }
+
     def maybe_reveal_story(
         self,
         terminal: bool = False,
@@ -943,21 +973,22 @@ class AgentBrain:
         thresholds = (
             (
                 memory_titles[0],
-                self.decisions >= 2
-                or self.cognition.stress >= 0.42
+                self.cognition.stress >= 0.42
                 or self.cognition.frustration >= 0.35,
                 "pressure_or_setback",
             ),
             (
                 memory_titles[1],
-                self.decisions >= 4
-                or self.cognition.confidence >= 0.68
-                or self.opponent_model.get("observed_actions", 0) >= 3,
+                bool(self._revealed_story_titles)
+                and (
+                    self.cognition.confidence >= 0.68
+                    or self.opponent_model.get("observed_actions", 0) >= 3
+                ),
                 "trust_or_pattern_recognition",
             ),
             (
                 memory_titles[2],
-                self.decisions >= 6 or terminal,
+                terminal and len(self._revealed_story_titles) >= 2,
                 "commitment_or_finale",
             ),
         )

@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import httpx
 import pytest
 
 from hva_engine.context import ContextComposer, ContextPolicy, SharedBlackboard, SharedFact
@@ -195,6 +196,51 @@ def test_remote_provider_transports_exact_messages_without_engine_debug_metadata
     ]
     assert "context_metadata" not in payload
     assert "debug_only" not in json.dumps(payload)
+
+
+def test_openai_compatible_sync_transport_retries_429_and_records_attempts(
+    monkeypatch,
+) -> None:
+    responses = [
+        httpx.Response(429, request=httpx.Request("POST", "https://provider.test")),
+        httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://provider.test"),
+            json={
+                "model": "retry-model",
+                "choices": [{"message": {"content": '{"action_index":0}'}}],
+                "usage": {"total_tokens": 12},
+            },
+        ),
+    ]
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, *_args, **_kwargs):
+            return responses.pop(0)
+
+    monkeypatch.setattr("hva_engine.llm.httpx.Client", FakeClient)
+    monkeypatch.setattr("hva_engine.llm.time.sleep", lambda _seconds: None)
+    provider = OpenAICompatibleProvider(
+        name="retry-test",
+        base_url="https://provider.test/v1",
+        model="retry-model",
+        max_retries=1,
+    )
+    response = provider.complete_sync(
+        LLMRequest(messages=[LLMMessage("user", "choose")])
+    )
+    assert response.content == '{"action_index":0}'
+    assert response.telemetry["attempt_count"] == 2
+    assert response.telemetry["transport"] == "httpx_sync_debug"
 
 
 def test_decision_client_rejects_context_metadata_that_does_not_match_messages() -> None:

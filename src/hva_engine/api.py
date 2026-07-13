@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from hva_engine.danmaku import dispatch_danmaku
 from hva_engine.engine import EngineError, build_default_engine
@@ -50,10 +53,17 @@ class MatchSockets:
 
 
 sockets = MatchSockets()
+mutation_lock = asyncio.Lock()
 
 
 def _bad_request(exc: EngineError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
+
+
+def _require_debug_token(token: str | None) -> None:
+    configured = os.environ.get("HVA_DEBUG_TOKEN")
+    if not configured or token is None or not secrets.compare_digest(token, configured):
+        raise HTTPException(status_code=403, detail="Admin debug access is disabled or denied")
 
 
 @app.get("/", include_in_schema=False)
@@ -87,14 +97,16 @@ async def list_character_cards() -> list[dict[str, object]]:
 @app.post("/api/matches", response_model=MatchView, status_code=201)
 async def create_match(request: CreateMatchRequest) -> MatchView:
     try:
-        return engine.create_match(
-            request.mod_id,
-            request.human_name,
-            request.seed,
-            request.mode,
-            agent_tuning=request.agent_tuning,
-            agent_characters=request.agent_characters,
-        )
+        async with mutation_lock:
+            return await run_in_threadpool(
+                engine.create_match,
+                request.mod_id,
+                request.human_name,
+                request.seed,
+                request.mode,
+                agent_tuning=request.agent_tuning,
+                agent_characters=request.agent_characters,
+            )
     except EngineError as exc:
         raise _bad_request(exc) from exc
 
@@ -110,7 +122,10 @@ async def get_match(match_id: str) -> MatchView:
 @app.post("/api/matches/{match_id}/actions", response_model=MatchView)
 async def submit_action(match_id: str, request: SubmitActionRequest) -> MatchView:
     try:
-        view = engine.submit(match_id, request.actor_id, request.action)
+        async with mutation_lock:
+            view = await run_in_threadpool(
+                engine.submit, match_id, request.actor_id, request.action
+            )
         await sockets.broadcast(match_id, view)
         return view
     except EngineError as exc:
@@ -131,9 +146,26 @@ async def evaluation_summary() -> dict[str, object]:
 
 
 @app.get("/api/matches/{match_id}/agents/{agent_id}/context-preview")
-async def context_preview(match_id: str, agent_id: str) -> dict[str, object]:
+async def context_preview(
+    match_id: str,
+    agent_id: str,
+    x_hva_debug_token: str | None = Header(default=None),
+) -> dict[str, object]:
+    _require_debug_token(x_hva_debug_token)
     try:
         return engine.context_preview(match_id, agent_id)
+    except EngineError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/debug/matches/{match_id}", response_model=MatchView)
+async def debug_match(
+    match_id: str,
+    x_hva_debug_token: str | None = Header(default=None),
+) -> MatchView:
+    _require_debug_token(x_hva_debug_token)
+    try:
+        return engine.debug_view(match_id)
     except EngineError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -149,7 +181,14 @@ async def public_fact_graph(match_id: str, agent_id: str) -> dict[str, object]:
 @app.post("/api/live/danmaku", response_model=MatchView)
 async def danmaku(request: DanmakuRequest) -> MatchView:
     try:
-        view = dispatch_danmaku(engine, request.match_id, request.message, request.user)
+        async with mutation_lock:
+            view = await run_in_threadpool(
+                dispatch_danmaku,
+                engine,
+                request.match_id,
+                request.message,
+                request.user,
+            )
         await sockets.broadcast(request.match_id, view)
         return view
     except EngineError as exc:

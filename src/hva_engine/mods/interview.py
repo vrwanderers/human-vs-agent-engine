@@ -14,6 +14,7 @@ class AdversarialInterview(GameMod):
     description = "用极端、讽刺和尖锐的问题测试 Agent 的心理反馈、身份解释与人物弧光。"
     tags = ("interview", "narrative", "psychology", "identity", "text")
     capabilities = frozenset({"turn_based", "text_state", "stochastic", "audience_input"})
+    competitive_balance_applicable = False
     supported_modes = ("human_vs_agent",)
 
     _questions = (

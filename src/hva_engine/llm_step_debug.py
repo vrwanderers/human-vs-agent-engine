@@ -284,7 +284,9 @@ def run_interactive_interview(
         provider._emit(result)
 
     final_evaluation = engine.evaluation(view.id)
-    decisions = [event for event in view.events if event.type == "agent_decision"]
+    decisions = [
+        event for event in engine.get(view.id).events if event.type == "agent_decision"
+    ]
     report = {
         "test": "interactive_single_step_llm_interview",
         "provider": provider.name,
@@ -299,9 +301,9 @@ def run_interactive_interview(
             event.payload.get("decision_source") != "llm" for event in decisions
         ),
         "final_arc": view.state["arc_stage"],
-        "final_psychological_matrix": next(iter(view.agent_summaries.values()))[
-            "psychological_matrix"
-        ],
+        "final_psychological_matrix": next(
+            iter(engine.debug_view(view.id).agent_summaries.values())
+        )["psychological_matrix"],
         "transcript": view.state["transcript"],
         "steps": results,
         "evaluation": final_evaluation,

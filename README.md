@@ -93,7 +93,7 @@ curl -X POST http://127.0.0.1:8000/api/matches \
 
 人物卡只作为稳定身份先验，实时动作仍由世界状态、私有记忆、心理矩阵、社会信念、人物动力和 MOD 合法动作共同推演。自定义人物卡使用同一 `CharacterCardSpec`，未知字段和 `action_rules` 会被拒绝。
 
-Agent-only 对局会自动运行到终局。响应中的 `agent_summaries` 暴露世界模型、心理矩阵、公开身份片段、叙事进度和公开事实图谱；事件流中的 `agent_decision` 保存可观察的简短理由、置信度、预期效果和影响表现，但不保存私密思维链或战略底牌。引擎内部的 `agent_influence_intent` 事件不会进入 `MatchView`，且其他 Agent 只能收到公开事件和自己的私有意图。
+Agent-only 对局会自动运行到终局。公开 `MatchView` 中的 `agent_summaries` 只包含已揭露身份、叙事进度和公开事实；心理矩阵、记忆、计划、对手模型、完整 `agent_decision` 与 `agent_influence_intent` 都属于引擎私有数据。公开动作还会移除 `response_plan` 等内部注解。可信开发环境可设置 `HVA_DEBUG_TOKEN`，再通过 `X-HVA-Debug-Token` 请求管理员调试视图或 `context-preview`。
 
 默认 MVP 使用可复现的启发式 Agent，便于建立评价基线；`hva_engine.llm` 已提供分层上下文、Provider 注册表和严格动作索引解析，可在不改 MOD 规则的前提下替换为真实 LLM。
 
@@ -149,7 +149,7 @@ uvicorn hva_engine.api:app --reload
 
 Docker 开发环境可用 `HVA_FACT_STORE=neo4j docker compose --profile neo4j up --build`。详细约束见 [事实图谱](docs/FACT_GRAPH.md)。
 
-运行评分 MVP-10 的多种子镜像基准（对抗模式会交换双方席位）：
+运行评分 MVP-11 的多种子镜像基准（对抗模式会交换双方席位）：
 
 ```bash
 python -m hva_engine.benchmark --seeds 25

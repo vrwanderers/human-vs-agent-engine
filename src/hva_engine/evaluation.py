@@ -1,43 +1,23 @@
 from __future__ import annotations
 
+import json
 import math
 from collections import Counter
+from hashlib import sha256
+from importlib.resources import files
 from typing import Any
 
 from hva_engine.models import ActorKind, EventVisibility, GameEvent, MatchMode, Player
 from hva_engine.mods.base import GameMod
 
+_CONFIG_TEXT = files("hva_engine").joinpath("data/evaluation_v11.json").read_text("utf-8")
+EVALUATION_CONFIG: dict[str, Any] = json.loads(_CONFIG_TEXT)
+EVALUATION_CONFIG_SHA256 = sha256(
+    json.dumps(EVALUATION_CONFIG, sort_keys=True, separators=(",", ":")).encode()
+).hexdigest()
 MODE_WEIGHTS = {
-    MatchMode.HUMAN_VS_AGENT: {
-        "player_engagement": 0.23,
-        "engine_generality": 0.13,
-        "dynamism": 0.17,
-        "virtual_player_rating": 0.12,
-        "ai_opponent_intelligence": 0.20,
-        "ai_human_likeness": 0.15,
-    },
-    MatchMode.AGENT_VS_AGENT: {
-        "engine_generality": 0.15,
-        "dynamism": 0.23,
-        "virtual_player_rating": 0.15,
-        "ai_opponent_intelligence": 0.32,
-        "ai_human_likeness": 0.15,
-    },
-    MatchMode.AGENT_COOP: {
-        "engine_generality": 0.14,
-        "dynamism": 0.22,
-        "virtual_player_rating": 0.15,
-        "ai_opponent_intelligence": 0.34,
-        "ai_human_likeness": 0.15,
-    },
-    MatchMode.HUMAN_AGENT_COOP: {
-        "player_engagement": 0.18,
-        "engine_generality": 0.13,
-        "dynamism": 0.17,
-        "virtual_player_rating": 0.12,
-        "ai_opponent_intelligence": 0.25,
-        "ai_human_likeness": 0.15,
-    },
+    MatchMode(mode): weights
+    for mode, weights in EVALUATION_CONFIG["weights_by_mode"].items()
 }
 ENGINE_CAPABILITIES = {
     "turn_based",
@@ -55,7 +35,7 @@ def _clamp(value: float) -> float:
 
 
 class MatchEvaluator:
-    """MVP-10 evaluator with outcome reappraisal and bounded decision diagnostics."""
+    """MVP-11 evaluator separating instrumentation, behavior, and human evidence."""
 
     def evaluate(
         self,
@@ -127,14 +107,25 @@ class MatchEvaluator:
         )
 
         max_score = max([1.0, *scores.values()])
-        competitiveness = 0.5
-        if finished and mode in {MatchMode.HUMAN_VS_AGENT, MatchMode.AGENT_VS_AGENT}:
+        adversarial_mode = mode in {MatchMode.HUMAN_VS_AGENT, MatchMode.AGENT_VS_AGENT}
+        competitive_balance_applicable = (
+            adversarial_mode and mod.competitive_balance_applicable
+        )
+        competitiveness: float | None = 0.5 if competitive_balance_applicable else None
+        if finished and competitive_balance_applicable:
             values = [scores.get(player.id, 0.0) for player in players]
             competitiveness = 1 - min(1.0, abs(values[0] - values[1]) / max_score)
         team_performance = _clamp(sum(scores.values()) / max(1, len(scores) * 1.5))
-        virtual_rating = (
-            _clamp(team_performance) if "coop" in mode.value else _clamp(competitiveness)
+        agent_role_performance = _clamp(
+            sum(scores.get(agent_id, 0.0) for agent_id in agents)
+            / max(1, len(agents) * mod.score_ceiling)
         )
+        if "coop" in mode.value:
+            virtual_rating = _clamp(team_performance)
+        elif competitive_balance_applicable:
+            virtual_rating = _clamp(float(competitiveness))
+        else:
+            virtual_rating = agent_role_performance
 
         legal_rate = _clamp(len(agent_actions) / len(decisions)) if decisions else 1.0
         rules_valid = not decisions or (legal_rate == 1.0 and len(agent_actions) == len(decisions))
@@ -166,13 +157,27 @@ class MatchEvaluator:
             / max(1, len(decisions))
         )
         story_reveals = [event for event in events if event.type == "story_reveal"]
-        story_fact_provenance = _clamp(
-            sum(bool(event.payload.get("supporting_fact_ids")) for event in story_reveals)
-            / max(1, len(story_reveals))
+        story_fact_provenance = (
+            _clamp(
+                sum(bool(event.payload.get("supporting_fact_ids")) for event in story_reveals)
+                / len(story_reveals)
+            )
+            if story_reveals
+            else None
         )
         agent_types = Counter(event.payload.get("action_type") for event in agent_actions)
         policy_diversity = _clamp(len(agent_types) / max(1, min(4, len(agent_actions))))
-        human_likeness, human_likeness_profile = self._human_likeness(decisions, events, agents)
+        mechanism_human_likeness, human_likeness_profile = self._human_likeness(
+            decisions, events, agents
+        )
+        language_profile = self._language_behavior(decisions, events)
+        human_likeness = mechanism_human_likeness
+        if language_profile["applicable"]:
+            blend = EVALUATION_CONFIG["human_likeness_blend"]
+            human_likeness = _clamp(
+                blend["mechanism_proxy"] * mechanism_human_likeness
+                + blend["language_behavior"] * language_profile["score"]
+            )
         strategic_influence_profile = self._strategic_influence(
             decisions, action_events, events
         )
@@ -205,9 +210,8 @@ class MatchEvaluator:
             }
         mod_specific_profile: dict[str, Any] | None = None
         if mod.id == "adversarial_interview":
-            mod_specific_profile = self._interview_assessment(decisions, events)
-            human_likeness = _clamp(
-                0.55 * human_likeness + 0.45 * mod_specific_profile["composite"]
+            mod_specific_profile = self._interview_assessment(
+                decisions, events, language_profile
             )
         coordination_events = sum(event.type == "coordination_bonus" for event in events)
         cooperation = (
@@ -218,15 +222,22 @@ class MatchEvaluator:
             if "coop" in mode.value
             else None
         )
-        task_performance = cooperation if cooperation is not None else competitiveness
+        task_performance = (
+            cooperation
+            if cooperation is not None
+            else (
+                float(competitiveness)
+                if competitive_balance_applicable and competitiveness is not None
+                else agent_role_performance
+            )
+        )
         intelligence = _clamp(
-            0.07 * world_model_rate
-            + 0.03 * fact_graph_grounding
-            + 0.15 * prediction_accuracy
+            0.10 * world_model_rate
+            + 0.05 * fact_graph_grounding
+            + 0.20 * prediction_accuracy
             + 0.10 * memory_influence
-            + 0.10 * planning_rate
+            + 0.15 * planning_rate
             + 0.10 * policy_diversity
-            + 0.15 * human_likeness
             + 0.30 * task_performance
         )
         if not rules_valid:
@@ -245,6 +256,49 @@ class MatchEvaluator:
         if not rules_valid:
             composite = 0.0
 
+        observation_isolation = _clamp(
+            sum(
+                event.payload.get("observation_policy", {}).get("viewer_scoped") is True
+                and event.payload.get("observation_policy", {}).get("viewer_id")
+                == event.actor_id
+                for event in decisions
+            )
+            / max(1, len(decisions))
+        )
+        context_ownership = _clamp(
+            sum(
+                event.payload.get("context_policy", {}).get("owner_agent_id")
+                == event.actor_id
+                for event in decisions
+            )
+            / max(1, len(decisions))
+        )
+        layer_weights = EVALUATION_CONFIG["score_layers"]
+        structural_inputs = {
+            "rules_compliance": legal_rate,
+            "observation_isolation": observation_isolation,
+            "context_ownership": context_ownership,
+            "fact_grounding": fact_graph_grounding,
+        }
+        structural_integrity = _clamp(
+            sum(
+                structural_inputs[key] * weight
+                for key, weight in layer_weights["structural_integrity"].items()
+            )
+        )
+        behavioral_inputs = {
+            "human_likeness": human_likeness,
+            "task_intelligence": intelligence,
+            "dynamism": dynamism,
+        }
+        behavioral_quality = _clamp(
+            sum(
+                behavioral_inputs[key] * weight
+                for key, weight in layer_weights["behavioral_quality"].items()
+            )
+        )
+        provider_execution = self._provider_execution(decisions)
+
         ai_capability_profile = {
             "rules_compliance": legal_rate,
             "world_model_grounding": world_model_rate,
@@ -253,31 +307,64 @@ class MatchEvaluator:
             "memory_influence_rate": memory_influence,
             "decision_planning": planning_rate,
             "policy_diversity": policy_diversity,
-            "adversarial_competitiveness": _clamp(competitiveness)
-            if mode in {MatchMode.HUMAN_VS_AGENT, MatchMode.AGENT_VS_AGENT}
+            "adversarial_competitiveness": _clamp(float(competitiveness))
+            if competitive_balance_applicable and competitiveness is not None
+            else None,
+            "asymmetric_role_performance": agent_role_performance
+            if adversarial_mode and not competitive_balance_applicable
             else None,
             "cooperation_quality": cooperation,
             "fact_graph_grounding": fact_graph_grounding,
             "story_fact_provenance": story_fact_provenance,
             "human_likeness": human_likeness,
             "human_likeness_components": human_likeness_profile,
+            "human_likeness_mechanism_proxy": mechanism_human_likeness,
+            "language_behavior": language_profile,
             "interview_assessment": mod_specific_profile,
             "character_card_grounding": character_card_profile,
             "strategic_influence": strategic_influence_profile,
         }
         return {
-            "version": "mvp-10",
+            "version": EVALUATION_CONFIG["version"],
+            "config_sha256": EVALUATION_CONFIG_SHA256,
             "valid_for_comparison": rules_valid,
+            "valid_for_provider_comparison": (
+                rules_valid and provider_execution["fallback_rate"] == 0.0
+                if provider_execution["applicable"]
+                else None
+            ),
             "composite_score": composite,
+            "composite_semantics": "research_proxy_not_human_validation",
+            "score_layers": {
+                "structural_integrity": {
+                    "score": structural_integrity,
+                    "components": structural_inputs,
+                    "evidence": "engine_events",
+                },
+                "behavioral_quality": {
+                    "score": behavioral_quality,
+                    "components": behavioral_inputs,
+                    "evidence": "behavioral_proxy",
+                },
+                "player_experience": {
+                    "score": None,
+                    "evidence": "human_panel_required",
+                    "status": "not_measured",
+                },
+            },
             "weights": weights,
             "dimensions": dimensions,
             "ai_capability_profile": ai_capability_profile,
             "mod_specific_profile": mod_specific_profile,
+            "provider_execution": provider_execution,
             "evidence": {
                 "player_engagement": "proxy" if humans else "not_applicable",
                 "memory_effectiveness": "influence_proxy; ablation_required",
                 "dynamism": "within_match_trajectory",
                 "ai_human_likeness": "behavioral_proxy; human panel calibration required",
+                "language_behavior": (
+                    "surface and provenance diagnostics; semantic quality still needs raters"
+                ),
                 "research_validity": (
                     "architecture-grounded proxy; not evidence that an LLM reproduces humans"
                 ),
@@ -291,11 +378,15 @@ class MatchEvaluator:
             "applicability": {
                 "player_engagement": bool(humans),
                 "adversarial_competitiveness": mode
-                in {MatchMode.HUMAN_VS_AGENT, MatchMode.AGENT_VS_AGENT},
+                in {MatchMode.HUMAN_VS_AGENT, MatchMode.AGENT_VS_AGENT}
+                and competitive_balance_applicable,
+                "asymmetric_role_performance": adversarial_mode
+                and not competitive_balance_applicable,
                 "cooperation_quality": "coop" in mode.value,
                 "ai_human_likeness": bool(decisions),
                 "character_card_grounding": bool(selected_cards),
                 "strategic_influence": bool(strategic_influence_profile["intents"]),
+                "story_fact_provenance": bool(story_reveals),
             },
             "sample": {
                 "actions": len(action_events),
@@ -437,6 +528,146 @@ class MatchEvaluator:
                 nonnegative_outcomes / max(1, outcome_count)
             ),
         }
+
+    def _provider_execution(self, decisions: list[GameEvent]) -> dict[str, Any]:
+        attempted = [
+            event
+            for event in decisions
+            if event.payload.get("llm") is not None or event.payload.get("llm_error")
+        ]
+        successful = [event for event in attempted if event.payload.get("llm") is not None]
+        fallbacks = [event for event in attempted if event.payload.get("llm_error")]
+        usage: Counter[str] = Counter()
+        latencies: list[float] = []
+        providers: set[str] = set()
+        models: set[str] = set()
+        error_types: Counter[str] = Counter()
+        for event in attempted:
+            llm = event.payload.get("llm") or {}
+            error = event.payload.get("llm_error") or {}
+            usage.update(
+                {
+                    key: int(value)
+                    for key, value in llm.get("usage", {}).items()
+                    if isinstance(value, (int, float))
+                }
+            )
+            telemetry = llm.get("telemetry", {}) or error
+            if isinstance(telemetry.get("latency_ms"), (int, float)):
+                latencies.append(float(telemetry["latency_ms"]))
+            if provider := (llm.get("provider") or error.get("provider")):
+                providers.add(str(provider))
+            if model := llm.get("model"):
+                models.add(str(model))
+            if error.get("type"):
+                error_types[str(error["type"])] += 1
+        return {
+            "applicable": bool(attempted),
+            "attempts": len(attempted),
+            "successful_decisions": len(successful),
+            "fallback_decisions": len(fallbacks),
+            "fallback_rate": _clamp(len(fallbacks) / max(1, len(attempted))),
+            "providers": sorted(providers),
+            "models": sorted(models),
+            "usage": dict(usage),
+            "latency_ms": {
+                "mean": round(sum(latencies) / len(latencies), 3) if latencies else None,
+                "max": round(max(latencies), 3) if latencies else None,
+            },
+            "error_types": dict(error_types),
+        }
+
+    def _language_behavior(
+        self, decisions: list[GameEvent], events: list[GameEvent]
+    ) -> dict[str, Any]:
+        responses = [event for event in events if event.type == "interview_response"]
+        answers = [str(event.payload.get("answer", "")).strip() for event in responses]
+        answers = [answer for answer in answers if answer]
+        if not answers:
+            return {
+                "applicable": False,
+                "score": None,
+                "components": {},
+                "responses": 0,
+                "evidence": "no_language_responses",
+            }
+
+        normalized = [self._normalize_text(answer) for answer in answers]
+        exact_non_repetition = len(set(normalized)) / len(normalized)
+        novelty_scores: list[float] = []
+        for index, text in enumerate(normalized):
+            current = self._ngrams(text)
+            similarities = [
+                self._jaccard(current, self._ngrams(other))
+                for other_index, other in enumerate(normalized)
+                if other_index != index
+            ]
+            novelty_scores.append(1 - max(similarities, default=0.5))
+        surface_novelty = sum(novelty_scores) / len(novelty_scores)
+
+        questions = {
+            str(event.payload.get("question_id")): event
+            for event in events
+            if event.type == "interview_question"
+        }
+        grounding_scores: list[float] = []
+        for response in responses:
+            question = questions.get(str(response.payload.get("question_id")))
+            if question is None:
+                continue
+            question_text = " ".join(
+                [
+                    str(question.payload.get("theme", "")),
+                    str(question.payload.get("prompt", "")),
+                ]
+            )
+            overlap = self._ngrams(self._normalize_text(question_text)) & self._ngrams(
+                self._normalize_text(str(response.payload.get("answer", "")))
+            )
+            grounding_scores.append(min(1.0, len(overlap) / 4))
+        question_grounding = (
+            sum(grounding_scores) / len(grounding_scores) if grounding_scores else 0.0
+        )
+
+        substantive_scores: list[float] = []
+        for text in normalized:
+            grams = self._ngrams(text)
+            length_score = min(1.0, len(text) / 60)
+            lexical_variety = min(1.0, len(grams) / max(1, len(text) - 1))
+            substantive_scores.append(0.65 * length_score + 0.35 * lexical_variety)
+        substantive_expression = sum(substantive_scores) / len(substantive_scores)
+        autonomous_utterance_rate = sum(
+            bool(event.payload.get("utterance")) for event in decisions
+        ) / max(1, len(responses))
+
+        components = {
+            "exact_non_repetition": _clamp(exact_non_repetition),
+            "surface_novelty": _clamp(surface_novelty),
+            "question_grounding": _clamp(question_grounding),
+            "substantive_expression": _clamp(substantive_expression),
+            "autonomous_utterance_rate": _clamp(autonomous_utterance_rate),
+        }
+        weights = EVALUATION_CONFIG["language_behavior"]
+        return {
+            "applicable": True,
+            "score": _clamp(
+                sum(components[key] * weight for key, weight in weights.items())
+            ),
+            "components": components,
+            "responses": len(answers),
+            "evidence": "surface_behavior_proxy_human_panel_required",
+        }
+
+    def _normalize_text(self, text: str) -> str:
+        return "".join(character.lower() for character in text if character.isalnum())
+
+    def _ngrams(self, text: str, size: int = 2) -> set[str]:
+        if len(text) < size:
+            return {text} if text else set()
+        return {text[index : index + size] for index in range(len(text) - size + 1)}
+
+    def _jaccard(self, left: set[str], right: set[str]) -> float:
+        return len(left & right) / max(1, len(left | right))
 
     def _human_likeness(
         self, decisions: list[GameEvent], events: list[GameEvent], agents: set[str]
@@ -814,7 +1045,10 @@ class MatchEvaluator:
         return score, profile
 
     def _interview_assessment(
-        self, decisions: list[GameEvent], events: list[GameEvent]
+        self,
+        decisions: list[GameEvent],
+        events: list[GameEvent],
+        language_profile: dict[str, Any],
     ) -> dict[str, Any]:
         questions = [event for event in events if event.type == "interview_question"]
         responses = [event for event in events if event.type == "interview_response"]
@@ -935,8 +1169,9 @@ class MatchEvaluator:
             "strategy_blend_complexity": strategy_blend_complexity,
             "character_arc": character_arc,
             "resilience": resilience,
+            "language_behavior": float(language_profile.get("score") or 0.0),
         }
-        composite = _clamp(
+        mechanism_composite = _clamp(
             0.07 * question_coverage
             + 0.15 * psychological_reactivity
             + 0.09 * pressure_signal_grounding
@@ -947,8 +1182,12 @@ class MatchEvaluator:
             + 0.15 * character_arc
             + 0.09 * resilience
         )
+        composite = _clamp(
+            0.65 * mechanism_composite + 0.35 * components["language_behavior"]
+        )
         return {
             "composite": composite,
+            "mechanism_composite": mechanism_composite,
             "components": components,
             "final_arc": final_arc,
             "questions": len(questions),

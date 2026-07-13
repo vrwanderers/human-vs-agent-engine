@@ -122,7 +122,9 @@ def test_deceptive_llm_turn_cannot_write_claim_into_canonical_fact_graph() -> No
     assert raw_intent.payload["truthfulness"] < 0.8
     assert raw_intent.payload["fact_proposals"]["accepted"] == []
     assert raw_intent.payload["fact_proposals"]["firewall"] == "deceptive_turn"
-    decision = next(event for event in view.events if event.type == "agent_decision")
+    decision = next(
+        event for event in engine.get(view.id).events if event.type == "agent_decision"
+    )
     assert decision.payload["decision_source"] == "llm"
     assert decision.payload["llm"]["fact_proposals"]["status"] == (
         "canonical_write_not_permitted"

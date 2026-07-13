@@ -55,7 +55,9 @@ def run_real_interview(
         view = engine.submit(view.id, view.human_player_id, action)
         human_turn += 1
 
-    decisions = [event for event in view.events if event.type == "agent_decision"]
+    decisions = [
+        event for event in engine.get(view.id).events if event.type == "agent_decision"
+    ]
     usage: Counter[str] = Counter()
     decision_rows: list[dict[str, Any]] = []
     for event in decisions:
@@ -83,7 +85,7 @@ def run_real_interview(
             f"Expected six real LLM decisions, observed {fallback_decisions} fallbacks"
         )
     evaluation = engine.evaluation(view.id)
-    agent_summary = next(iter(view.agent_summaries.values()))
+    agent_summary = next(iter(engine.debug_view(view.id).agent_summaries.values()))
     return {
         "test": "real_llm_adversarial_interview",
         "seed": seed,

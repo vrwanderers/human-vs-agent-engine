@@ -29,10 +29,11 @@ def run_benchmark(
         MatchMode.HUMAN_VS_AGENT,
         MatchMode.AGENT_VS_AGENT,
     }
+    mirrored_competition = adversarial and engine.mods[mod_id].competitive_balance_applicable
     cases = [
         (seed, reverse)
         for seed in seed_list
-        for reverse in ((False, True) if adversarial else (False,))
+        for reverse in ((False, True) if mirrored_competition else (False,))
     ]
     for seed, reverse_seats in cases:
         view = engine.create_match(
@@ -57,6 +58,9 @@ def run_benchmark(
         evaluations.append(evaluation)
         if "coop" in selected_mode.value:
             outcomes.append("success" if view.state.get("success") is True else "failure")
+            continue
+        if not engine.mods[mod_id].competitive_balance_applicable:
+            outcomes.append("completed")
             continue
 
         top = max(view.scores.values())
@@ -90,7 +94,7 @@ def run_benchmark(
     identity_equivalent = mean(identity_results) if identity_results else None
     seat_equivalent = mean(seat_results) if seat_results else None
     balance: dict[str, Any]
-    if adversarial:
+    if mirrored_competition:
         draw_rate = outcome_counts["draw"] / len(evaluations)
         balance = {
             "initiative_balance": centered_balance(initiative_equivalent),
@@ -99,18 +103,25 @@ def run_benchmark(
             "draw_rate": round(draw_rate, 3),
             "repeated_draw_penalty": round(1 - min(1.0, max(0.0, draw_rate - 0.35) / 0.65), 3),
         }
-    else:
+    elif "coop" in selected_mode.value:
         success_rate = outcome_counts["success"] / len(evaluations)
         balance = {
             "success_rate": round(success_rate, 3),
             "target_success_balance": round(1 - min(1.0, abs(success_rate - 0.65) / 0.65), 3),
         }
+    else:
+        balance = {
+            "applicable": False,
+            "reason": "asymmetric_non_zero_sum_roles",
+        }
+    score_layer_keys = evaluations[0]["score_layers"]
     return {
         "evaluation_version": evaluations[0]["version"],
         "mod": mod_id,
         "mode": selected_mode.value,
         "matches": len(evaluations),
-        "mirror_pairs": len(seed_list) if adversarial else 0,
+        "mirror_pairs": len(seed_list) if mirrored_competition else 0,
+        "config_sha256": evaluations[0]["config_sha256"],
         "composite_mean": round(mean(composite), 3),
         "composite_sd": round(pstdev(composite), 3),
         "dimensions": {
@@ -124,6 +135,20 @@ def run_benchmark(
                 ]
             )
             or evaluations
+        },
+        "score_layers": {
+            key: (
+                round(mean(values), 3)
+                if (
+                    values := [
+                        item["score_layers"][key]["score"]
+                        for item in evaluations
+                        if item["score_layers"][key]["score"] is not None
+                    ]
+                )
+                else None
+            )
+            for key in score_layer_keys
         },
         "outcomes": dict(outcome_counts),
         "balance": balance,

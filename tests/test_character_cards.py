@@ -63,7 +63,9 @@ def test_builtin_card_seeds_identity_but_runtime_still_chooses_legal_actions() -
 
     while view.status == "active":
         view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
-    decisions = [event for event in view.events if event.type == "agent_decision"]
+    decisions = [
+        event for event in engine.get(view.id).events if event.type == "agent_decision"
+    ]
     applied = [
         event
         for event in view.events
@@ -131,7 +133,7 @@ def test_same_questions_produce_distinct_character_trajectories_without_lookup_t
             view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
         sequences[card_id] = tuple(
             event.payload["action_type"]
-            for event in view.events
+            for event in engine.get(view.id).events
             if event.type == "agent_decision"
         )
     assert len(set(sequences.values())) >= 3

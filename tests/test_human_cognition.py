@@ -115,7 +115,9 @@ def test_decision_mode_represents_dual_process_bounded_rationality() -> None:
 def test_engine_emits_research_grounded_human_likeness_evidence() -> None:
     engine = build_default_engine()
     view = engine.create_match("debate_arena", seed=19, mode=MatchMode.AGENT_VS_AGENT)
-    decisions = [event for event in view.events if event.type == "agent_decision"]
+    decisions = [
+        event for event in engine.get(view.id).events if event.type == "agent_decision"
+    ]
     assert decisions
     assert any(event.payload["retrieved_memory_ids"] for event in decisions[2:])
     assert all(event.payload["appraisal"] for event in decisions)

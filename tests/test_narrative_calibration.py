@@ -146,7 +146,9 @@ def test_match_evaluation_exposes_narrative_dynamics_without_private_reasoning()
     view = engine.create_match("adversarial_interview", seed=23)
     while view.status == "active":
         view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
-    decisions = [event for event in view.events if event.type == "agent_decision"]
+    decisions = [
+        event for event in engine.get(view.id).events if event.type == "agent_decision"
+    ]
     assert all(event.payload["narrative_dynamics"]["active_conflict"] for event in decisions)
     assert all(event.payload["narrative_action_affordance"] for event in decisions)
     assert any(
@@ -159,7 +161,7 @@ def test_match_evaluation_exposes_narrative_dynamics_without_private_reasoning()
     )
     evaluation = engine.evaluation(view.id)
     components = evaluation["ai_capability_profile"]["human_likeness_components"]
-    assert evaluation["version"] == "mvp-10"
+    assert evaluation["version"] == "mvp-11"
     assert components["motivational_conflict"] > 0
     assert components["consequence_hysteresis"] > 0
     assert components["distortion_pressure"] > 0

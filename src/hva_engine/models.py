@@ -188,6 +188,8 @@ class MatchView(BaseModel):
     scores: dict[str, float]
     events: list[GameEvent]
     agent_summaries: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    view_scope: str = "public"
+    viewer_id: str | None = None
 
 
 class CreateMatchRequest(BaseModel):

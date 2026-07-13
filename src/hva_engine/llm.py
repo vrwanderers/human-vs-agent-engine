@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+import time
+from asyncio import sleep as async_sleep
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
+from time import perf_counter
 from typing import Any, Protocol
 
 import httpx
@@ -31,6 +34,7 @@ class LLMResponse:
     model: str | None
     usage: dict[str, int]
     raw: dict[str, Any]
+    telemetry: dict[str, Any] = field(default_factory=dict)
 
 
 def message_content_sha256(messages: list[LLMMessage]) -> str:
@@ -72,6 +76,7 @@ class OpenAICompatibleProvider:
         extra_headers: dict[str, str] | None = None,
         timeout: float = 30.0,
         supports_response_format: bool = True,
+        max_retries: int = 2,
     ) -> None:
         self.name = name
         self.base_url = base_url.rstrip("/")
@@ -80,6 +85,7 @@ class OpenAICompatibleProvider:
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
         self.supports_response_format = supports_response_format
+        self.max_retries = max(0, max_retries)
 
     @classmethod
     def from_env(cls, prefix: str = "HVA_LLM") -> OpenAICompatibleProvider:
@@ -92,6 +98,8 @@ class OpenAICompatibleProvider:
             base_url=base_url,
             model=model,
             api_key=os.environ.get(f"{prefix}_API_KEY"),
+            timeout=float(os.environ.get(f"{prefix}_TIMEOUT", "30")),
+            max_retries=int(os.environ.get(f"{prefix}_MAX_RETRIES", "2")),
             supports_response_format=os.environ.get(
                 f"{prefix}_SUPPORTS_RESPONSE_FORMAT", "true"
             ).lower()
@@ -101,25 +109,66 @@ class OpenAICompatibleProvider:
     async def complete(self, request: LLMRequest) -> LLMResponse:
         headers = self._headers()
         payload = self._payload(request)
+        started = perf_counter()
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions", headers=headers, json=payload
-            )
-            response.raise_for_status()
-            data = response.json()
-        return self._parse_response(data)
+            for attempt in range(1, self.max_retries + 2):
+                try:
+                    response = await client.post(
+                        f"{self.base_url}/chat/completions", headers=headers, json=payload
+                    )
+                    response.raise_for_status()
+                    parsed = self._parse_response(response.json())
+                    return replace(
+                        parsed,
+                        telemetry={
+                            "transport": "httpx_async",
+                            "attempt_count": attempt,
+                            "provider_latency_ms": round(
+                                (perf_counter() - started) * 1_000, 3
+                            ),
+                        },
+                    )
+                except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:
+                    if attempt > self.max_retries or not self._retryable(exc):
+                        raise
+                    await async_sleep(min(0.25 * 2 ** (attempt - 1), 1.0))
+        raise RuntimeError("LLM provider retry loop exited unexpectedly")
 
     def complete_sync(self, request: LLMRequest) -> LLMResponse:
         """Synchronous debug-runtime path; production servers should use async orchestration."""
+        started = perf_counter()
         with httpx.Client(timeout=self.timeout) as client:
-            response = client.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json=self._payload(request),
-            )
-            response.raise_for_status()
-            data = response.json()
-        return self._parse_response(data)
+            for attempt in range(1, self.max_retries + 2):
+                try:
+                    response = client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=self._headers(),
+                        json=self._payload(request),
+                    )
+                    response.raise_for_status()
+                    parsed = self._parse_response(response.json())
+                    return replace(
+                        parsed,
+                        telemetry={
+                            "transport": "httpx_sync_debug",
+                            "attempt_count": attempt,
+                            "provider_latency_ms": round(
+                                (perf_counter() - started) * 1_000, 3
+                            ),
+                        },
+                    )
+                except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:
+                    if attempt > self.max_retries or not self._retryable(exc):
+                        raise
+                    time.sleep(min(0.25 * 2 ** (attempt - 1), 1.0))
+        raise RuntimeError("LLM provider retry loop exited unexpectedly")
+
+    def _retryable(self, exc: Exception) -> bool:
+        if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code == 429 or exc.response.status_code >= 500
+        return False
 
     def _headers(self) -> dict[str, str]:
         headers = {"content-type": "application/json", **self.extra_headers}
@@ -215,9 +264,10 @@ class LLMDecisionClient:
         *,
         context_metadata: dict[str, Any] | None = None,
     ) -> LLMDecisionResult:
-        response = await self.provider.complete(
-            self._request(messages, context_metadata=context_metadata)
-        )
+        request = self._request(messages, context_metadata=context_metadata)
+        started = perf_counter()
+        response = await self.provider.complete(request)
+        response = self._with_client_telemetry(response, request, started)
         return self._parse_decision(response, legal_actions)
 
     def choose_structured_sync(
@@ -230,10 +280,25 @@ class LLMDecisionClient:
         complete_sync = getattr(self.provider, "complete_sync", None)
         if complete_sync is None:
             raise TypeError("Configured LLM provider does not implement complete_sync")
-        response = complete_sync(
-            self._request(messages, context_metadata=context_metadata)
-        )
+        request = self._request(messages, context_metadata=context_metadata)
+        started = perf_counter()
+        response = complete_sync(request)
+        response = self._with_client_telemetry(response, request, started)
         return self._parse_decision(response, legal_actions)
+
+    def _with_client_telemetry(
+        self, response: LLMResponse, request: LLMRequest, started: float
+    ) -> LLMResponse:
+        telemetry = {
+            **response.telemetry,
+            "provider": self.provider.name,
+            "model": response.model or request.model,
+            "latency_ms": round((perf_counter() - started) * 1_000, 3),
+            "request_content_sha256": message_content_sha256(request.messages),
+            "prompt_messages": len(request.messages),
+            "status": "ok",
+        }
+        return replace(response, telemetry=telemetry)
 
     def _request(
         self,

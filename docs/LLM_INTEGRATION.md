@@ -126,7 +126,7 @@ hva-llm-step-debug --character-card ah_q --content-mode mature_fiction \
 - 完整自传与未揭露事实只属于当前 Agent；公开故事必须通过 `story_reveal` 事件。
 - 决策事件只保存摘要和可验证特征，明确不请求、不保存私密思维链。
 - 完整 `agent_influence_intent` 使用 `engine_private` 可见性；对手上下文过滤掉这些事件，公开事件只保留可观察的 `influence_presentation`。
-- `context-preview` 是开发调试端点；公开部署必须在网关层关闭或加入管理员鉴权。
+- `context-preview` 和 `/api/debug/*` 是开发调试端点；服务端默认拒绝访问，必须配置 `HVA_DEBUG_TOKEN` 并发送匹配的 `X-HVA-Debug-Token`。
 
 ## 上下文压缩
 
@@ -145,4 +145,4 @@ hva-llm-step-debug --character-card ah_q --content-mode mature_fiction \
 
 ## 接入非兼容 Provider
 
-实现 `LLMProvider.complete` 并注册即可。适配器负责把统一 messages、温度、token 限额和 JSON 格式要求翻译成厂商协议；鉴权、重试、限流和熔断留在 Provider 层，游戏引擎只消费标准化响应与 usage。
+实现 `LLMProvider.complete` 并注册即可。适配器负责把统一 messages、温度、token 限额和 JSON 格式要求翻译成厂商协议。OpenAI-compatible 适配器已支持超时、可重试的 429/5xx/传输错误与退避，并记录调用次数、延迟、模型和 usage；限流、成本预算和熔断仍需在 Provider 执行层补齐。

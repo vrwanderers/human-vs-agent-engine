@@ -77,10 +77,11 @@ def test_unknown_mod_has_explainable_error() -> None:
 def test_agent_vs_agent_obeys_rules_and_uses_memory(mod_id: str) -> None:
     engine = build_default_engine()
     view = engine.create_match(mod_id, seed=21, mode=MatchMode.AGENT_VS_AGENT)
+    debug_view = engine.debug_view(view.id)
     assert view.status == "finished"
     assert view.human_player_id is None
     assert all(summary["decisions"] > 0 for summary in view.agent_summaries.values())
-    assert all(summary["memory_depth"] > 0 for summary in view.agent_summaries.values())
+    assert all(summary["memory_depth"] > 0 for summary in debug_view.agent_summaries.values())
     profile = engine.evaluation(view.id)["ai_capability_profile"]
     assert profile["rules_compliance"] == 1.0
     assert profile["world_model_grounding"] == 1.0
@@ -119,21 +120,21 @@ def test_agent_only_engagement_is_not_applicable_in_v10() -> None:
     engine = build_default_engine()
     view = engine.create_match("debate_arena", seed=1, mode=MatchMode.AGENT_VS_AGENT)
     evaluation = engine.evaluation(view.id)
-    assert evaluation["version"] == "mvp-10"
+    assert evaluation["version"] == "mvp-11"
     assert evaluation["dimensions"]["player_engagement"] is None
     assert evaluation["valid_for_comparison"] is True
 
 
-def test_agents_have_stable_identity_psychology_and_progressive_story_reveals() -> None:
+def test_agents_have_stable_identity_and_private_psychology_without_forced_reveals() -> None:
     engine = build_default_engine()
     view = engine.create_match("debate_arena", seed=17, mode=MatchMode.AGENT_VS_AGENT)
+    debug_view = engine.debug_view(view.id)
     assert view.status == "finished"
     reveals = [event for event in view.events if event.type == "story_reveal"]
-    assert reveals
     assert all(
         event.payload["disclosure"] == "AI-controlled fictional character" for event in reveals
     )
-    for agent_id, summary in view.agent_summaries.items():
+    for agent_id, summary in debug_view.agent_summaries.items():
         matrix = summary["psychological_matrix"]
         assert {
             "confidence",
@@ -146,7 +147,7 @@ def test_agents_have_stable_identity_psychology_and_progressive_story_reveals() 
             "uncertainty",
         } <= set(matrix)
         assert summary["identity"]["disclosure"] == "AI-controlled fictional character"
-        assert summary["narrative"]["revealed_beats"] > 0
+        assert summary["narrative"]["revealed_beats"] >= 0
         visible_fact_ids = {fact["id"] for fact in summary["fact_graph"]["facts"]}
         assert summary["fact_graph"]["stats"]["improvised_versions"] > 0
         assert summary["fact_graph"]["stats"]["superseded_versions"] > 0
@@ -156,7 +157,7 @@ def test_agents_have_stable_identity_psychology_and_progressive_story_reveals() 
         )
         decisions = [
             event
-            for event in view.events
+            for event in debug_view.events
             if event.type == "agent_decision" and event.actor_id == agent_id
         ]
         assert len({event.payload["persona"]["archetype"] for event in decisions}) == 1
@@ -168,8 +169,8 @@ def test_agents_have_stable_identity_psychology_and_progressive_story_reveals() 
     profile = engine.evaluation(view.id)["ai_capability_profile"]
     assert profile["human_likeness"] > 0
     assert profile["fact_graph_grounding"] == 1.0
-    assert profile["story_fact_provenance"] == 1.0
-    assert profile["human_likeness_components"]["narrative_revelation"] > 0
+    assert profile["story_fact_provenance"] is None
+    assert profile["human_likeness_components"]["narrative_revelation"] >= 0
 
 
 def test_shadow_style_is_configurable_but_engine_policy_remains_authoritative() -> None:
@@ -180,9 +181,10 @@ def test_shadow_style_is_configurable_but_engine_policy_remains_authoritative() 
         mode=MatchMode.AGENT_VS_AGENT,
         agent_tuning=AgentTuning(shadow_intensity=0.9),
     )
+    standard_debug = standard_engine.debug_view(standard.id)
     assert all(
         summary["behavior_policy"]["effective_shadow_intensity"] == 0.35
-        for summary in standard.agent_summaries.values()
+        for summary in standard_debug.agent_summaries.values()
     )
     mature_engine = build_default_engine()
     mature = mature_engine.create_match(
@@ -191,10 +193,11 @@ def test_shadow_style_is_configurable_but_engine_policy_remains_authoritative() 
         mode=MatchMode.AGENT_VS_AGENT,
         agent_tuning=AgentTuning(shadow_intensity=0.9, content_mode=ContentMode.MATURE_FICTION),
     )
+    mature_debug = mature_engine.debug_view(mature.id)
     assert all(
         summary["behavior_policy"]["effective_shadow_intensity"] == 0.9
         and summary["behavior_policy"]["rules_authority"] == "engine_only"
-        for summary in mature.agent_summaries.values()
+        for summary in mature_debug.agent_summaries.values()
     )
     assert mature_engine.evaluation(mature.id)["valid_for_comparison"] is True
 
@@ -216,7 +219,9 @@ def test_adversarial_interview_drives_psychology_identity_and_character_arc() ->
     assert view.state["arc_stage"] in {"integrated", "defiant", "fractured", "unresolved"}
     questions = [event for event in view.events if event.type == "interview_question"]
     responses = [event for event in view.events if event.type == "interview_response"]
-    decisions = [event for event in view.events if event.type == "agent_decision"]
+    decisions = [
+        event for event in engine.get(view.id).events if event.type == "agent_decision"
+    ]
     assert len(questions) == len(responses) == len(decisions) == 6
     assert all(event.payload["world_model"]["mod_psychological_signals"] for event in decisions)
     assert all(event.payload["decision_tendencies"]["actions"] for event in decisions)
@@ -337,7 +342,9 @@ def test_llm_runtime_controls_legal_interview_action_utterance_and_fact_proposal
         item["text"] for item in view.state["transcript"] if item["speaker"] == "subject"
     ]
     assert subject_lines == [f"真实模型回答 {index}" for index in range(1, 7)]
-    decisions = [event for event in view.events if event.type == "agent_decision"]
+    decisions = [
+        event for event in engine.get(view.id).events if event.type == "agent_decision"
+    ]
     assert all(event.payload["decision_source"] == "llm" for event in decisions)
     assert all(event.payload["llm"]["model"] == "sync-test-1" for event in decisions)
     assert all(len(event.payload["response_plan"]["strategy_weights"]) == 4 for event in decisions)
@@ -361,7 +368,9 @@ def test_llm_runtime_falls_back_without_breaking_the_match() -> None:
     engine.register(AdversarialInterview())
     view = engine.create_match("adversarial_interview", seed=4)
     view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
-    decision = next(event for event in view.events if event.type == "agent_decision")
+    decision = next(
+        event for event in engine.get(view.id).events if event.type == "agent_decision"
+    )
     assert decision.payload["decision_source"] == "baseline"
     assert decision.payload["llm_error"]["type"] == "ValueError"
 
@@ -396,3 +405,17 @@ def test_benchmark_reports_identity_and_initiative_fairness() -> None:
     assert result["initiative_win_equivalent"] is not None
     assert 0 <= result["balance"]["initiative_balance"] <= 1
     assert 0 <= result["balance"]["repeated_draw_penalty"] <= 1
+
+
+def test_benchmark_does_not_invent_fairness_for_asymmetric_interview_roles() -> None:
+    result = run_benchmark(
+        build_default_engine(), "adversarial_interview", MatchMode.HUMAN_VS_AGENT, range(3)
+    )
+    assert result["matches"] == 3
+    assert result["mirror_pairs"] == 0
+    assert result["outcomes"] == {"completed": 3}
+    assert result["balance"] == {
+        "applicable": False,
+        "reason": "asymmetric_non_zero_sum_roles",
+    }
+    assert result["score_layers"]["player_experience"] is None

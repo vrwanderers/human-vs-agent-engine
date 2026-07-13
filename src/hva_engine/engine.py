@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from dataclasses import dataclass, field
 from random import Random
 from typing import Any
@@ -34,6 +35,7 @@ from hva_engine.mods import (
     TacticalDuel,
 )
 from hva_engine.mods.base import GameMod
+from hva_engine.observation import ObservationPolicy
 
 
 class EngineError(ValueError):
@@ -93,6 +95,7 @@ class GameEngine:
         self.llm_fallback = llm_fallback
         self.agent_runtime = "llm" if llm_decision_client is not None else "baseline"
         self.character_cards = character_cards or CharacterCardRegistry.load_default()
+        self.observation_policy = ObservationPolicy()
 
     def register(self, mod: GameMod) -> None:
         if mod.id in self.mods:
@@ -201,7 +204,7 @@ class GameEngine:
         )
         self.matches[match_id] = match
         self._run_agents(match)
-        return self.view(match_id)
+        return self.view(match_id, match.human_player_id)
 
     def _make_players(self, mode: MatchMode, human_name: str) -> list[Player]:
         if mode in {MatchMode.HUMAN_VS_AGENT, MatchMode.HUMAN_AGENT_COOP}:
@@ -227,7 +230,7 @@ class GameEngine:
             raise EngineError(f"Illegal action. Allowed actions: {allowed}")
         self._apply(match, actor_id, canonical, source="player")
         self._run_agents(match)
-        return self.view(match_id)
+        return self.view(match_id, match.human_player_id)
 
     def _apply(
         self, match: Match, actor_id: str, action: Action, source: str
@@ -242,11 +245,12 @@ class GameEngine:
             for key in set(previous_state) | set(new_state)
             if previous_state.get(key) != new_state.get(key)
         )
+        public_action = match.mod.public_action(action, actor_id)
         match.add_event(
             "action_applied",
             actor_id,
-            action_type=action.type,
-            action_payload=action.payload,
+            action_type=public_action.type,
+            action_payload=public_action.payload,
             source=source,
             scores_before=scores_before,
             scores_after=scores_after,
@@ -286,18 +290,26 @@ class GameEngine:
                 raise EngineError("MOD returned no legal action for an active agent")
             brain = match.agent_brains[actor_id]
             shared_facts = match.blackboard.view_for(actor_id) if match.blackboard else []
+            observation = self.observation_policy.for_agent(
+                mod=match.mod,
+                state=match.state,
+                scores=match.mod.scores(match.state),
+                events=self._events_for_agent(match, actor_id),
+                shared_facts=shared_facts,
+                agent_id=actor_id,
+            )
             brain.observe(
                 match.mod,
-                match.state,
-                match.mod.scores(match.state),
-                self._events_for_agent(match, actor_id),
+                observation.state,
+                observation.scores,
+                observation.events,
                 match.id,
-                shared_facts,
+                observation.shared_facts,
             )
             use_llm = self.llm_decision_client if match.mod.id in self.llm_mod_ids else None
             action, trace = brain.decide(
                 match.mod,
-                match.state,
+                observation.state,
                 legal,
                 match.rng,
                 decision_client=use_llm,
@@ -307,6 +319,7 @@ class GameEngine:
                 raise EngineError("Agent policy returned an illegal action")
             score_before = match.mod.scores(match.state).get(actor_id, 0.0)
             private_influence = trace.pop("_private_influence_intent")
+            trace["observation_policy"] = observation.diagnostics
             match.add_event(
                 "agent_influence_intent",
                 actor_id,
@@ -314,7 +327,11 @@ class GameEngine:
                 **private_influence,
             )
             decision_event = match.add_event(
-                "agent_decision", actor_id, action_type=action.type, **trace
+                "agent_decision",
+                actor_id,
+                visibility=EventVisibility.ENGINE_PRIVATE,
+                action_type=action.type,
+                **trace,
             )
             applied_payload = {
                 **action.payload,
@@ -385,7 +402,43 @@ class GameEngine:
         except KeyError as exc:
             raise EngineError(f"Unknown match: {match_id}") from exc
 
-    def view(self, match_id: str) -> MatchView:
+    def view(self, match_id: str, viewer_id: str | None = None) -> MatchView:
+        match = self.get(match_id)
+        if viewer_id is not None and viewer_id not in {player.id for player in match.players}:
+            raise EngineError("Viewer is not a player in this match")
+        current = match.mod.current_player_id(match.state)
+        legal = (
+            match.mod.legal_actions(match.state, current)
+            if current and viewer_id == current
+            else []
+        )
+        return MatchView(
+            id=match.id,
+            mod_id=match.mod.id,
+            mode=match.mode,
+            status=match.status,
+            players=deepcopy(match.players),
+            human_player_id=match.human_player_id,
+            current_player_id=current,
+            state=deepcopy(match.mod.public_state(deepcopy(match.state), viewer_id)),
+            legal_actions=deepcopy(legal),
+            scores=deepcopy(match.mod.scores(match.state)),
+            events=[
+                deepcopy(event)
+                for event in match.events
+                if event.visibility == EventVisibility.PUBLIC
+            ],
+            agent_summaries={
+                pid: deepcopy(brain.public_summary())
+                for pid, brain in match.agent_brains.items()
+            },
+            view_scope="player" if viewer_id else "public",
+            viewer_id=viewer_id,
+        )
+
+    def debug_view(self, match_id: str) -> MatchView:
+        """Trusted-development view. Never expose this without authorization."""
+
         match = self.get(match_id)
         current = match.mod.current_player_id(match.state)
         legal = match.mod.legal_actions(match.state, current) if current else []
@@ -397,15 +450,12 @@ class GameEngine:
             players=match.players,
             human_player_id=match.human_player_id,
             current_player_id=current,
-            state=match.mod.public_state(match.state),
+            state=match.state,
             legal_actions=legal,
             scores=match.mod.scores(match.state),
-            events=[
-                event
-                for event in match.events
-                if event.visibility == EventVisibility.PUBLIC
-            ],
+            events=match.events,
             agent_summaries={pid: brain.summary() for pid, brain in match.agent_brains.items()},
+            view_scope="admin_debug",
         )
 
     def evaluation(self, match_id: str) -> dict[str, Any]:

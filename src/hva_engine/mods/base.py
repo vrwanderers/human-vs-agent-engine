@@ -16,6 +16,8 @@ class GameMod(ABC):
     tags: tuple[str, ...] = ()
     capabilities: frozenset[str] = frozenset({"turn_based", "numeric_state"})
     supported_modes: tuple[str, ...] = ("human_vs_agent", "agent_vs_agent")
+    competitive_balance_applicable: bool = True
+    score_ceiling: float = 2.0
 
     @abstractmethod
     def initial_state(self, players: list[Player], rng: Random) -> dict[str, Any]: ...
@@ -39,6 +41,16 @@ class GameMod(ABC):
 
     def public_state(self, state: dict[str, Any], _viewer_id: str | None = None) -> dict[str, Any]:
         return state
+
+    def public_action(self, action: Action, _actor_id: str) -> Action:
+        """Remove engine-only decision annotations from a publicly observable action."""
+
+        payload = {
+            key: value
+            for key, value in action.payload.items()
+            if key != "response_plan" and not key.startswith("_")
+        }
+        return action.model_copy(update={"payload": payload})
 
     def agent_action(
         self, state: dict[str, Any], actor_id: str, legal: list[Action], rng: Random
