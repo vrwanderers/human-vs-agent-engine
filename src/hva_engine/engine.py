@@ -14,7 +14,13 @@ from hva_engine.context import SharedBlackboard
 from hva_engine.evaluation import MatchEvaluator
 from hva_engine.fact_graph import AgentFactGraph
 from hva_engine.fact_store import FactStore, InMemoryFactStore, build_fact_store_from_env
+from hva_engine.human_cognition import MemorySystem
 from hva_engine.llm import LLMDecisionClient, OpenAICompatibleProvider
+from hva_engine.memory_store import (
+    InMemoryIndexedMemoryStore,
+    LongTermMemoryStore,
+    build_memory_store_from_env,
+)
 from hva_engine.models import (
     Action,
     ActorKind,
@@ -29,6 +35,7 @@ from hva_engine.models import (
 )
 from hva_engine.mods import (
     AdversarialInterview,
+    AgentTown,
     CrisisCoop,
     DebateArena,
     RacingStrategy,
@@ -36,6 +43,12 @@ from hva_engine.mods import (
 )
 from hva_engine.mods.base import GameMod
 from hva_engine.observation import ObservationPolicy
+from hva_engine.stimulus import RealityStatus, StimulusModality, StimulusPrivacy
+from hva_engine.world_store import (
+    InMemoryWorldStateStore,
+    WorldStateStore,
+    build_world_store_from_env,
+)
 
 
 class EngineError(ValueError):
@@ -54,6 +67,8 @@ class Match:
     events: list[GameEvent] = field(default_factory=list)
     agent_brains: dict[str, AgentBrain] = field(default_factory=dict)
     blackboard: SharedBlackboard | None = None
+    world_id: str | None = None
+    world_revision: int | None = None
 
     @property
     def status(self) -> MatchStatus:
@@ -85,6 +100,8 @@ class GameEngine:
         llm_mod_ids: set[str] | None = None,
         llm_fallback: bool = True,
         character_cards: CharacterCardRegistry | None = None,
+        memory_store: LongTermMemoryStore | None = None,
+        world_store: WorldStateStore | None = None,
     ) -> None:
         self.mods: dict[str, GameMod] = {}
         self.matches: dict[str, Match] = {}
@@ -96,6 +113,8 @@ class GameEngine:
         self.agent_runtime = "llm" if llm_decision_client is not None else "baseline"
         self.character_cards = character_cards or CharacterCardRegistry.load_default()
         self.observation_policy = ObservationPolicy()
+        self.memory_store = memory_store or InMemoryIndexedMemoryStore()
+        self.world_store = world_store or InMemoryWorldStateStore()
 
     def register(self, mod: GameMod) -> None:
         if mod.id in self.mods:
@@ -111,6 +130,10 @@ class GameEngine:
         reverse_seats: bool = False,
         agent_tuning: AgentTuning | None = None,
         agent_characters: list[AgentCharacterSelection] | None = None,
+        human_memory_id: str | None = None,
+        agent_memory_owner_ids: list[str] | None = None,
+        world_id: str | None = None,
+        resume_world: bool = False,
     ) -> MatchView:
         if mod_id not in self.mods:
             raise EngineError(f"Unknown MOD: {mod_id}")
@@ -131,7 +154,7 @@ class GameEngine:
             raise EngineError(
                 f"MOD {mod_id} does not support {selected_mode.value}; supported: {supported}"
             )
-        players = self._make_players(selected_mode, human_name)
+        players = self._make_players(selected_mode, human_name, mod)
         if reverse_seats:
             players.reverse()
         selections = agent_characters or []
@@ -141,15 +164,69 @@ class GameEngine:
                 f"Received {len(selections)} character cards for {len(agent_players)} agents"
             )
         resolved_cards: dict[str, tuple[Any, str]] = {}
-        for player, selection in zip(agent_players, selections, strict=False):
+        supplied_memory_owners = agent_memory_owner_ids or []
+        if len(supplied_memory_owners) > len(agent_players):
+            raise EngineError(
+                f"Received {len(supplied_memory_owners)} memory owners for "
+                f"{len(agent_players)} agents"
+            )
+        memory_owner_ids = {
+            player.id: supplied_memory_owners[index]
+            for index, player in enumerate(agent_players[: len(supplied_memory_owners)])
+        }
+        for index, (player, selection) in enumerate(
+            zip(agent_players, selections, strict=False)
+        ):
             try:
                 card, source_kind = self.character_cards.resolve(selection)
             except CharacterCardError as exc:
                 raise EngineError(str(exc)) from exc
             player.name = card.name
             resolved_cards[player.id] = (card, source_kind)
+            if selection.memory_owner_id is not None:
+                if index < len(supplied_memory_owners):
+                    raise EngineError(
+                        "Provide a memory owner either with the character selection "
+                        "or agent_memory_owner_ids, not both"
+                    )
+                memory_owner_ids[player.id] = selection.memory_owner_id
+        requested_memory_owners = list(memory_owner_ids.values())
+        if len(requested_memory_owners) != len(set(requested_memory_owners)):
+            raise EngineError("memory_owner_id must be unique for each agent in a match")
         human = next((p for p in players if p.kind == ActorKind.HUMAN), None)
+        participant_memory_ids = {
+            player.id: (
+                human_memory_id or player.id
+                if player.kind == ActorKind.HUMAN
+                else memory_owner_ids.get(player.id, player.id)
+            )
+            for player in players
+        }
         state = mod.initial_state(players, rng)
+        state["_memory_owner_ids"] = deepcopy(participant_memory_ids)
+        world_revision: int | None = None
+        if resume_world and not world_id:
+            raise EngineError("resume_world requires world_id")
+        if world_id:
+            if mod.persistent_world_state(state) is None:
+                raise EngineError(f"MOD {mod_id} does not support persistent worlds")
+            snapshot = self.world_store.load(world_id)
+            if resume_world:
+                if snapshot is None:
+                    raise EngineError(f"Unknown persistent world: {world_id}")
+                if snapshot.mod_id != mod_id:
+                    raise EngineError(
+                        f"World {world_id} belongs to MOD {snapshot.mod_id}, not {mod_id}"
+                    )
+                state = mod.restore_persistent_world(state, snapshot.state)
+                state["_memory_owner_ids"] = deepcopy(participant_memory_ids)
+                world_revision = snapshot.revision
+            elif snapshot is not None:
+                raise EngineError(
+                    f"World {world_id} already exists; set resume_world=true to continue it"
+                )
+            state["world_id"] = world_id
+            state["world_revision"] = world_revision or 0
         tuning = agent_tuning or AgentTuning()
         behavior_policy = RuntimeBehaviorPolicy.from_tuning(tuning)
         brains: dict[str, AgentBrain] = {}
@@ -163,9 +240,22 @@ class GameEngine:
                     card, behavior_policy, source_kind
                 )
             else:
-                profile = CognitiveProfile.sample(rng, role, behavior_policy)
-                identity = AgentIdentity.sample(player.name, profile, role, rng)
-            fact_graph = AgentFactGraph.from_identity(player.id, identity, self.fact_store)
+                generated_character = mod.agent_character(
+                    state,
+                    player,
+                    role,
+                    behavior_policy,
+                    participant_memory_ids[player.id],
+                    rng,
+                )
+                if generated_character is None:
+                    profile = CognitiveProfile.sample(rng, role, behavior_policy)
+                    identity = AgentIdentity.sample(player.name, profile, role, rng)
+                else:
+                    profile, identity = generated_character
+            fact_graph = AgentFactGraph.from_identity(
+                participant_memory_ids[player.id], identity, self.fact_store
+            )
             brains[player.id] = AgentBrain(
                 player.id,
                 role,
@@ -173,6 +263,19 @@ class GameEngine:
                 identity,
                 behavior_policy,
                 fact_graph,
+                participant_directory={
+                    other.id: {
+                        "memory_key": participant_memory_ids[other.id],
+                        "display_name": other.name,
+                        "kind": other.kind.value,
+                    }
+                    for other in players
+                    if other.id != player.id
+                },
+                memory_system=MemorySystem(
+                    owner_id=participant_memory_ids[player.id],
+                    store=self.memory_store,
+                ),
             )
         match = Match(
             id=match_id,
@@ -188,6 +291,8 @@ class GameEngine:
                 if "coop" in selected_mode.value
                 else None
             ),
+            world_id=world_id,
+            world_revision=world_revision,
         )
         match.add_event(
             "match_created",
@@ -203,19 +308,38 @@ class GameEngine:
             character_decision_model="runtime_cognition_not_scripted_actions",
         )
         self.matches[match_id] = match
+        if world_id and not resume_world:
+            self._save_world(match)
+        elif world_id:
+            match.add_event(
+                "world_resumed",
+                world_id=world_id,
+                world_revision=world_revision,
+            )
         self._run_agents(match)
         return self.view(match_id, match.human_player_id)
 
-    def _make_players(self, mode: MatchMode, human_name: str) -> list[Player]:
+    def _make_players(
+        self, mode: MatchMode, human_name: str, mod: GameMod
+    ) -> list[Player]:
+        agent_names = ("Astra", "Nova", "Mira", "Orion", "Sora", "Lin", "Iris", "Theo")
+        agent_count = mod.agent_count_for_mode(mode.value)
+        if not 1 <= agent_count <= len(agent_names):
+            raise EngineError("MOD agent_count_for_mode must be between 1 and 8")
+        agents = [
+            Player(
+                id=f"agent-{uuid4().hex[:8]}",
+                name=agent_names[index],
+                kind=ActorKind.AGENT,
+            )
+            for index in range(agent_count)
+        ]
         if mode in {MatchMode.HUMAN_VS_AGENT, MatchMode.HUMAN_AGENT_COOP}:
             return [
                 Player(id=f"human-{uuid4().hex[:8]}", name=human_name, kind=ActorKind.HUMAN),
-                Player(id=f"agent-{uuid4().hex[:8]}", name="Astra", kind=ActorKind.AGENT),
+                *agents,
             ]
-        return [
-            Player(id=f"agent-{uuid4().hex[:8]}", name="Astra", kind=ActorKind.AGENT),
-            Player(id=f"agent-{uuid4().hex[:8]}", name="Nova", kind=ActorKind.AGENT),
-        ]
+        return agents
 
     def submit(self, match_id: str, actor_id: str, action: Action) -> MatchView:
         match = self.get(match_id)
@@ -232,6 +356,99 @@ class GameEngine:
         self._run_agents(match)
         return self.view(match_id, match.human_player_id)
 
+    def publish_stimulus(
+        self,
+        match_id: str,
+        *,
+        target_agent_id: str,
+        modality: StimulusModality | str,
+        semantic_tags: list[str] | tuple[str, ...] = (),
+        source_id: str = "world",
+        intensity: float = 0.5,
+        valence: float = 0.0,
+        urgency: float = 0.3,
+        novelty: float = 0.5,
+        uncertainty: float | None = None,
+        reality_status: RealityStatus | str | None = None,
+        privacy: StimulusPrivacy | str = StimulusPrivacy.PUBLIC,
+        causal_group: str | None = None,
+    ) -> GameEvent:
+        """Trusted ingestion boundary for vision/audio/touch/internal-event adapters.
+
+        Publishing a stimulus only changes the Agent's next observation. It never mutates
+        MOD state or the canonical fact graph and therefore cannot bypass legal actions.
+        """
+
+        match = self.get(match_id)
+        if match.status == MatchStatus.FINISHED:
+            raise EngineError("Cannot publish a stimulus to a finished match")
+        if target_agent_id not in match.agent_brains:
+            raise EngineError("Stimulus target must be an agent in this match")
+        try:
+            normalized_modality = StimulusModality(modality)
+            normalized_privacy = StimulusPrivacy(privacy)
+            normalized_status = (
+                RealityStatus(reality_status)
+                if reality_status is not None
+                else {
+                    StimulusModality.IMAGINATION: RealityStatus.IMAGINED,
+                    StimulusModality.MEMORY: RealityStatus.REMEMBERED,
+                    StimulusModality.WORLD_EVENT: RealityStatus.CANONICAL,
+                }.get(normalized_modality, RealityStatus.OBSERVED)
+            )
+        except ValueError as exc:
+            raise EngineError(str(exc)) from exc
+        if (
+            normalized_modality == StimulusModality.IMAGINATION
+            and normalized_status != RealityStatus.IMAGINED
+        ):
+            raise EngineError("Imagination stimuli must keep reality_status=imagined")
+        if (
+            normalized_modality == StimulusModality.MEMORY
+            and normalized_status != RealityStatus.REMEMBERED
+        ):
+            raise EngineError("Memory stimuli must keep reality_status=remembered")
+        cleaned_tags = []
+        for value in semantic_tags:
+            cleaned = " ".join(str(value).split())[:80].lower()
+            if cleaned and cleaned not in cleaned_tags:
+                cleaned_tags.append(cleaned)
+        numeric = {
+            "intensity": max(0.0, min(1.0, float(intensity))),
+            "valence": max(-1.0, min(1.0, float(valence))),
+            "urgency": max(0.0, min(1.0, float(urgency))),
+            "novelty": max(0.0, min(1.0, float(novelty))),
+        }
+        if uncertainty is not None:
+            numeric["uncertainty"] = max(0.0, min(1.0, float(uncertainty)))
+        event_actor = (
+            target_agent_id
+            if normalized_privacy == StimulusPrivacy.AGENT_PRIVATE
+            else source_id
+        )
+        visibility = (
+            EventVisibility.ENGINE_PRIVATE
+            if normalized_privacy == StimulusPrivacy.AGENT_PRIVATE
+            else EventVisibility.PUBLIC
+        )
+        return match.add_event(
+            "sensory_stimulus",
+            event_actor,
+            visibility=visibility,
+            stimulus={
+                "source_id": " ".join(source_id.split())[:128] or "world",
+                "target_id": target_agent_id,
+                "modality": normalized_modality.value,
+                "semantic_tags": cleaned_tags[:12],
+                "reality_status": normalized_status.value,
+                "privacy": normalized_privacy.value,
+                "causal_group": (
+                    " ".join(causal_group.split())[:96] if causal_group else "external"
+                ),
+                **numeric,
+            },
+        )
+
     def _apply(
         self, match: Match, actor_id: str, action: Action, source: str
     ) -> list[dict[str, Any]]:
@@ -244,6 +461,7 @@ class GameEngine:
             key
             for key in set(previous_state) | set(new_state)
             if previous_state.get(key) != new_state.get(key)
+            and key not in {"_event_schedule", "_knowledge", "world"}
         )
         public_action = match.mod.public_action(action, actor_id)
         match.add_event(
@@ -260,17 +478,43 @@ class GameEngine:
         for item in emitted:
             details = dict(item)
             event_type = details.pop("type")
-            match.add_event(event_type, actor_id, **details)
+            event_actor_id = details.pop("_actor_id", actor_id)
+            visible_to = details.pop("_visible_to", None)
+            if visible_to is not None:
+                details["visible_to"] = list(visible_to)
+            match.add_event(event_type, event_actor_id, **details)
         if match.mod.is_terminal(match.state):
             match.add_event("match_finished", scores=match.mod.scores(match.state))
         if match.blackboard is not None:
-            outcomes = ",".join(item["type"] for item in emitted) or "state_updated"
+            shareable_outcomes = [
+                item["type"]
+                for item in emitted
+                if "_visible_to" not in item
+            ]
+            outcomes = ",".join(shareable_outcomes) or "state_updated"
             match.blackboard.publish(
                 actor_id,
                 f"Actor {actor_id} used {action.type}; observed outcomes: {outcomes}",
                 ("game_fact", action.type),
             )
+        self._save_world(match)
         return emitted
+
+    def _save_world(self, match: Match) -> None:
+        if not match.world_id:
+            return
+        snapshot_state = match.mod.persistent_world_state(match.state)
+        if snapshot_state is None:
+            return
+        snapshot = self.world_store.save(match.world_id, match.mod.id, snapshot_state)
+        match.world_revision = snapshot.revision
+        match.state["world_revision"] = snapshot.revision
+
+    def world_metadata(self, world_id: str) -> dict[str, Any]:
+        metadata = self.world_store.metadata(world_id)
+        if metadata is None:
+            raise EngineError(f"Unknown persistent world: {world_id}")
+        return metadata
 
     def _leaders(self, scores: dict[str, float]) -> list[str]:
         if not scores:
@@ -319,7 +563,22 @@ class GameEngine:
                 raise EngineError("Agent policy returned an illegal action")
             score_before = match.mod.scores(match.state).get(actor_id, 0.0)
             private_influence = trace.pop("_private_influence_intent")
+            private_reflex = trace.pop("_private_reflex")
             trace["observation_policy"] = observation.diagnostics
+            observable_reflex = trace.get("involuntary_response", {})
+            if observable_reflex.get("cues"):
+                match.add_event(
+                    "agent_involuntary_cue",
+                    actor_id,
+                    **observable_reflex,
+                )
+            if private_reflex.get("stimulus_frame", {}).get("stimulus_count", 0):
+                match.add_event(
+                    "agent_reflex_diagnostic",
+                    actor_id,
+                    visibility=EventVisibility.ENGINE_PRIVATE,
+                    **private_reflex,
+                )
             match.add_event(
                 "agent_influence_intent",
                 actor_id,
@@ -346,15 +605,20 @@ class GameEngine:
                 applied_action,
                 source="llm_agent" if trace["decision_source"] == "llm" else "baseline_agent",
             )
+            perceived_emitted = [
+                item
+                for item in emitted
+                if "_visible_to" not in item or actor_id in item["_visible_to"]
+            ]
             expected = set(trace["prediction"]["expected_events"])
-            actual = {item["type"] for item in emitted}
+            actual = {item["type"] for item in perceived_emitted}
             decision_event.payload["prediction_verified"] = bool(expected) and bool(
                 expected & actual
             )
             brain.remember(
                 int(match.state.get("turn", len(match.events))),
                 action,
-                emitted,
+                perceived_emitted,
                 score_before,
                 match.mod.scores(match.state).get(actor_id, 0.0),
                 trace,
@@ -363,6 +627,7 @@ class GameEngine:
                 brain.cognition.psychology_view()
             )
             decision_event.payload["outcome_reappraisal"] = brain.last_outcome_reappraisal
+            decision_event.payload["skill_after_outcome"] = brain.last_skill_update
             requested_reveals = trace.get("response_plan", {}).get(
                 "reveal_fact_ids", []
             )
@@ -389,7 +654,13 @@ class GameEngine:
         return [
             event
             for event in match.events
-            if event.visibility == EventVisibility.PUBLIC
+            if (
+                event.visibility == EventVisibility.PUBLIC
+                and (
+                    "visible_to" not in event.payload
+                    or agent_id in event.payload["visible_to"]
+                )
+            )
             or (
                 event.visibility == EventVisibility.ENGINE_PRIVATE
                 and event.actor_id == agent_id
@@ -432,6 +703,8 @@ class GameEngine:
                 pid: deepcopy(brain.public_summary())
                 for pid, brain in match.agent_brains.items()
             },
+            world_id=match.world_id,
+            world_revision=match.world_revision,
             view_scope="player" if viewer_id else "public",
             viewer_id=viewer_id,
         )
@@ -455,6 +728,8 @@ class GameEngine:
             scores=match.mod.scores(match.state),
             events=match.events,
             agent_summaries={pid: brain.summary() for pid, brain in match.agent_brains.items()},
+            world_id=match.world_id,
+            world_revision=match.world_revision,
             view_scope="admin_debug",
         )
 
@@ -566,8 +841,11 @@ def build_default_engine() -> GameEngine:
         llm_decision_client=decision_client,
         llm_mod_ids=llm_mod_ids,
         llm_fallback=os.environ.get("HVA_LLM_FALLBACK", "true").lower() not in {"0", "false", "no"},
+        memory_store=build_memory_store_from_env(),
+        world_store=build_world_store_from_env(),
     )
     for mod in (
+        AgentTown(),
         TacticalDuel(),
         RacingStrategy(),
         DebateArena(),

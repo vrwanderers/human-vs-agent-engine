@@ -700,6 +700,14 @@ class AdversarialInterview(GameMod):
             ),
         }[strategy]
 
+    def agent_utterance(
+        self, state: dict[str, Any], actor_id: str, action: Action
+    ) -> str | None:
+        question = state.get("last_question")
+        if not isinstance(question, dict) or action.type not in self._response_descriptions:
+            return None
+        return self._response_text(action.type, question)
+
     def _arc_stage(self, state: dict[str, Any]) -> str:
         if state["finished"]:
             if (

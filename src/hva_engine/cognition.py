@@ -174,6 +174,10 @@ class AutobiographicalMemory:
     recollection: str
     emotional_valence: float
     lesson: str
+    people: tuple[str, ...] = ()
+    themes: tuple[str, ...] = ()
+    place: str | None = None
+    time_period: str | None = None
 
     def public_view(self) -> dict[str, Any]:
         return {
@@ -181,6 +185,10 @@ class AutobiographicalMemory:
             "recollection": self.recollection,
             "emotional_valence": self.emotional_valence,
             "lesson": self.lesson,
+            "people": list(self.people),
+            "themes": list(self.themes),
+            "place": self.place,
+            "time_period": self.time_period,
         }
 
 
@@ -193,6 +201,8 @@ class AgentIdentity:
     values: tuple[str, ...]
     social_style: str
     formative_memories: tuple[AutobiographicalMemory, ...]
+    lived_memories: tuple[AutobiographicalMemory, ...] = ()
+    speech_style: dict[str, Any] = field(default_factory=dict)
     motive_weights: dict[str, float] = field(default_factory=dict)
     commitment_weights: dict[str, float] = field(default_factory=dict)
     character_card_id: str | None = None
@@ -282,6 +292,26 @@ class AgentIdentity:
             values=story["values"],
             social_style=story["style"],
             formative_memories=memories,
+            speech_style={
+                "voice_register": {
+                    "strategist": "technical",
+                    "opportunist": "colloquial",
+                    "guardian": "plain",
+                    "provocateur": "confrontational",
+                }[profile.archetype],
+                "education_voice": "self_consistent_fictional_voice",
+                "vocabulary_complexity": 0.68 if profile.archetype == "strategist" else 0.48,
+                "sentence_complexity": 0.65 if profile.archetype == "strategist" else 0.45,
+                "directness": 0.78 if profile.archetype == "provocateur" else 0.56,
+                "roughness": 0.62 if profile.archetype == "provocateur" else 0.12,
+                "warmth": 0.78 if profile.archetype == "guardian" else 0.38,
+                "humor": 0.5 if profile.archetype == "opportunist" else 0.2,
+                "philosophical_abstraction": 0.42,
+                "technical_jargon": 0.72 if profile.archetype == "strategist" else 0.18,
+                "verbosity": 0.48,
+                "verbal_habits": [],
+                "constraint_source": "sampled_archetype",
+            },
         )
 
     def private_view(self) -> dict[str, Any]:
@@ -293,6 +323,11 @@ class AgentIdentity:
             "values": list(self.values),
             "social_style": self.social_style,
             "formative_memories": [memory.public_view() for memory in self.formative_memories],
+            "lived_memory_index": {
+                "count": len(self.lived_memories),
+                "injection_policy": "retrieve_relevant_items_from_private_long_term_memory",
+            },
+            "speech_style": self.speech_style,
             "motive_weights": self.motive_weights,
             "commitment_weights": self.commitment_weights,
             "character_card_id": self.character_card_id,
@@ -386,6 +421,32 @@ class CognitiveState:
 
 
 ACTION_TRAITS: dict[str, dict[str, float]] = {
+    "move_to": {"risk": 0.22, "exploration": 0.58, "patience": 0.42},
+    "work": {"risk": 0.12, "patience": 0.82, "control": 0.72},
+    "socialize": {"risk": 0.28, "social": 0.94, "exploration": 0.25},
+    "rest": {"risk": 0.04, "patience": 0.86, "control": 0.68},
+    "explore": {"risk": 0.32, "exploration": 0.96, "patience": 0.32},
+    "wait": {"risk": 0.03, "patience": 0.92, "control": 0.25},
+    "respond_incident": {
+        "risk": 0.72,
+        "social": 0.78,
+        "control": 0.74,
+        "exploration": 0.18,
+    },
+    "seek_shelter": {"risk": 0.02, "patience": 0.7, "control": 0.88},
+    "check_bulletin": {"risk": 0.05, "exploration": 0.82, "patience": 0.72},
+    "support_neighbor": {"risk": 0.18, "social": 0.96, "patience": 0.68},
+    "check_phone": {"risk": 0.10, "social": 0.72, "exploration": 0.76},
+    "publish_post": {"risk": 0.38, "social": 0.86, "control": 0.38},
+    "reshare_post": {"risk": 0.56, "social": 0.82, "exploration": 0.40},
+    "comment_post": {"risk": 0.32, "social": 0.90, "patience": 0.42},
+    "verify_claim": {"risk": 0.16, "exploration": 0.88, "patience": 0.82, "control": 0.86},
+    "investigate_claim": {
+        "risk": 0.28,
+        "exploration": 0.96,
+        "patience": 0.88,
+        "control": 0.82,
+    },
     "attack": {"risk": 0.85, "aggression": 0.90, "patience": 0.10, "shadow": 0.45},
     "move": {"risk": 0.35, "exploration": 0.55, "patience": 0.45},
     "charge": {"risk": 0.10, "patience": 0.90, "control": 0.65},

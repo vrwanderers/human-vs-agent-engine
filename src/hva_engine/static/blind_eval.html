@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Agent 自然度盲评</title>
+  <style>
+    :root{color-scheme:dark}body{margin:0;background:#111923;color:#edf2e8;font:15px/1.55 system-ui,sans-serif}.wrap{max-width:1180px;margin:auto;padding:24px}.samples{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:#1d2a35;border:1px solid #587080;border-radius:12px;padding:18px}.transcript{white-space:pre-wrap;background:#121b24;padding:14px;border-radius:8px;max-height:50vh;overflow:auto}.ratings{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px}label{display:block;margin:8px 0}input,select,textarea,button{width:100%;box-sizing:border-box;background:#101820;color:#fff;border:1px solid #6a7f8e;border-radius:6px;padding:8px}button{background:#b88332;border:0;font-weight:700;margin-top:14px;cursor:pointer}.note{color:#a9bbc5}@media(max-width:760px){.samples,.ratings{grid-template-columns:1fr}}</style>
+</head>
+<body><main class="wrap">
+  <h1>Agent 反应自然度双盲评价</h1>
+  <p class="note">只根据可观察文本和行动评分。A/B 的运行条件、Provider 与模型名称不会显示。</p>
+  <div id="samples" class="samples"></div>
+  <div class="ratings">
+    <section class="card"><h2>样本 A</h2><div id="ratingA"></div></section>
+    <section class="card"><h2>样本 B</h2><div id="ratingB"></div></section>
+  </div>
+  <label>更自然的样本<select id="preferred"><option value="A">A</option><option value="B">B</option><option value="tie">难以区分</option></select></label>
+  <label>评价者匿名 ID<input id="rater" autocomplete="off" placeholder="例如 panel-001"></label>
+  <label>备注<textarea id="notes" rows="3"></textarea></label>
+  <button onclick="submitRating()">提交盲评</button><p id="status"></p>
+</main><script>
+const trialId=new URLSearchParams(location.search).get('trial');let trial;
+const dims=[['naturalness','反应自然度'],['identity_consistency','人物一致性'],['contextual_fit','情境贴合'],['dramatic_interest','戏剧趣味']];
+function controls(label){return dims.map(([id,name])=>`<label>${name}（1–7）<input id="${label}_${id}" type="range" min="1" max="7" value="4" oninput="this.nextElementSibling.textContent=this.value"><b>4</b></label>`).join('')}
+async function load(){if(!trialId){status.textContent='链接缺少 trial 参数';return}const r=await fetch(`/api/evaluations/blind-trials/${trialId}`);if(!r.ok){status.textContent='找不到盲评任务';return}trial=await r.json();samples.innerHTML=['A','B'].map(k=>`<section class="card"><h2>样本 ${k}</h2><div class="transcript">${trial.samples[k].transcript.map(x=>x.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))).join('\n')}</div></section>`).join('');ratingA.innerHTML=controls('a');ratingB.innerHTML=controls('b')}
+async function submitRating(){const body={study_id:trial.study_id,trial_id:trial.trial_id,rater_id:rater.value,preferred:preferred.value,notes:notes.value};for(const [id] of dims){body[`a_${id}`]=+document.getElementById(`a_${id}`).value;body[`b_${id}`]=+document.getElementById(`b_${id}`).value}const r=await fetch('/api/evaluations/blind-ratings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});status.textContent=r.ok?'已提交，谢谢。':`提交失败：${JSON.stringify(await r.json())}`};load();
+</script></body></html>

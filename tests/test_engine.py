@@ -419,3 +419,36 @@ def test_benchmark_does_not_invent_fairness_for_asymmetric_interview_roles() -> 
         "reason": "asymmetric_non_zero_sum_roles",
     }
     assert result["score_layers"]["player_experience"] is None
+
+
+def test_benchmark_does_not_invent_failure_for_town_sandbox() -> None:
+    result = run_benchmark(
+        build_default_engine(), "agent_town", MatchMode.AGENT_COOP, range(1)
+    )
+    assert result["outcomes"] == {"completed": 1}
+    assert result["balance"] == {
+        "applicable": False,
+        "reason": "sandbox_has_no_binary_success_outcome",
+    }
+
+
+def test_seeded_town_trace_is_independent_of_runtime_player_uuids() -> None:
+    def trace():
+        engine = build_default_engine()
+        view = engine.create_match("agent_town", seed=17, mode=MatchMode.AGENT_COOP)
+        match = engine.get(view.id)
+        names = {player.id: player.name for player in match.players}
+        events = [
+            (
+                event.type,
+                names.get(event.actor_id, event.actor_id),
+                event.payload.get("action_type"),
+                event.payload.get("rule_id"),
+            )
+            for event in match.events
+            if event.type == "action_applied" or event.type.startswith("town_world_")
+        ]
+        scores = sorted((names[player_id], score) for player_id, score in view.scores.items())
+        return events, scores
+
+    assert trace() == trace()

@@ -21,6 +21,16 @@ class ParsedCommand:
 
 
 ALIASES = {
+    "wait": "wait",
+    "等待": "wait",
+    "rest": "rest",
+    "休息": "rest",
+    "explore": "explore",
+    "探索": "explore",
+    "socialize": "socialize",
+    "交流": "socialize",
+    "move_to": "move_to",
+    "前往": "move_to",
     "move": "move",
     "移动": "move",
     "attack": "attack",

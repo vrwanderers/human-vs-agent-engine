@@ -115,7 +115,11 @@ class MatchEvaluator:
         if finished and competitive_balance_applicable:
             values = [scores.get(player.id, 0.0) for player in players]
             competitiveness = 1 - min(1.0, abs(values[0] - values[1]) / max_score)
-        team_performance = _clamp(sum(scores.values()) / max(1, len(scores) * 1.5))
+        cooperative_score_ceiling = min(1.5, mod.score_ceiling)
+        team_performance = _clamp(
+            sum(scores.values())
+            / max(1, len(scores) * cooperative_score_ceiling)
+        )
         agent_role_performance = _clamp(
             sum(scores.get(agent_id, 0.0) for agent_id in agents)
             / max(1, len(agents) * mod.score_ceiling)
@@ -213,7 +217,13 @@ class MatchEvaluator:
             mod_specific_profile = self._interview_assessment(
                 decisions, events, language_profile
             )
-        coordination_events = sum(event.type == "coordination_bonus" for event in events)
+        elif mod.id == "agent_town":
+            mod_specific_profile = self._town_assessment(
+                decisions, action_events, events, players
+            )
+        coordination_events = sum(
+            event.type in mod.cooperation_event_types for event in events
+        )
         cooperation = (
             _clamp(
                 0.45 * min(1.0, coordination_events / max(1, len(action_events) / 5))
@@ -298,6 +308,7 @@ class MatchEvaluator:
             )
         )
         provider_execution = self._provider_execution(decisions)
+        implicit_control_profile = self._implicit_control(decisions, events)
 
         ai_capability_profile = {
             "rules_compliance": legal_rate,
@@ -320,9 +331,15 @@ class MatchEvaluator:
             "human_likeness_components": human_likeness_profile,
             "human_likeness_mechanism_proxy": mechanism_human_likeness,
             "language_behavior": language_profile,
-            "interview_assessment": mod_specific_profile,
+            "interview_assessment": (
+                mod_specific_profile if mod.id == "adversarial_interview" else None
+            ),
+            "town_world_assessment": (
+                mod_specific_profile if mod.id == "agent_town" else None
+            ),
             "character_card_grounding": character_card_profile,
             "strategic_influence": strategic_influence_profile,
+            "implicit_control": implicit_control_profile,
         }
         return {
             "version": EVALUATION_CONFIG["version"],
@@ -373,6 +390,10 @@ class MatchEvaluator:
                 ),
                 "strategic_influence": (
                     "engine-intent audit and outcome proxy; human detection studies required"
+                ),
+                "implicit_control": (
+                    "event ordering, epistemic boundary, and provider-call telemetry; "
+                    "dramatic realism still requires human raters"
                 ),
             },
             "applicability": {
@@ -530,6 +551,13 @@ class MatchEvaluator:
         }
 
     def _provider_execution(self, decisions: list[GameEvent]) -> dict[str, Any]:
+        configured = [
+            event
+            for event in decisions
+            if event.payload.get("llm") is not None
+            or event.payload.get("llm_error")
+            or (event.payload.get("llm_skip") or {}).get("provider_available") is True
+        ]
         attempted = [
             event
             for event in decisions
@@ -557,13 +585,21 @@ class MatchEvaluator:
                 latencies.append(float(telemetry["latency_ms"]))
             if provider := (llm.get("provider") or error.get("provider")):
                 providers.add(str(provider))
+            skip = event.payload.get("llm_skip") or {}
+            if skip.get("provider"):
+                providers.add(str(skip["provider"]))
             if model := llm.get("model"):
                 models.add(str(model))
             if error.get("type"):
                 error_types[str(error["type"])] += 1
         return {
-            "applicable": bool(attempted),
+            "applicable": bool(configured),
+            "configured_decisions": len(configured),
             "attempts": len(attempted),
+            "skipped_decisions": len(configured) - len(attempted),
+            "skip_rate": _clamp(
+                (len(configured) - len(attempted)) / max(1, len(configured))
+            ),
             "successful_decisions": len(successful),
             "fallback_decisions": len(fallbacks),
             "fallback_rate": _clamp(len(fallbacks) / max(1, len(attempted))),
@@ -575,6 +611,144 @@ class MatchEvaluator:
                 "max": round(max(latencies), 3) if latencies else None,
             },
             "error_types": dict(error_types),
+        }
+
+    def _implicit_control(
+        self, decisions: list[GameEvent], events: list[GameEvent]
+    ) -> dict[str, Any]:
+        if not decisions:
+            return {
+                "applicable": False,
+                "stimulus_grounding_rate": 0.0,
+                "fast_appraisal_rate": 0.0,
+                "deliberation_gate_coverage": 0.0,
+                "observable_cue_rate": 0.0,
+                "cue_before_deliberation_rate": 0.0,
+                "epistemic_boundary_rate": 0.0,
+                "provider_skip_rate": None,
+                "skill_instrumentation_rate": 0.0,
+                "automatic_skill_takeover_rate": 0.0,
+                "guided_skill_decisions": 0,
+                "automatic_skill_decisions": 0,
+                "new_context_guidance_decisions": 0,
+                "skill_stage_transitions": {},
+                "modalities_observed": [],
+            }
+        grounded = [
+            event
+            for event in decisions
+            if int(event.payload.get("stimulus_frame", {}).get("stimulus_count", 0)) > 0
+        ]
+        modalities = sorted(
+            {
+                str(modality)
+                for event in grounded
+                for modality in event.payload.get("stimulus_frame", {}).get("modalities", [])
+            }
+        )
+        cue_events = [event for event in events if event.type == "agent_involuntary_cue"]
+        ordered_cues = 0
+        for cue in cue_events:
+            next_decision = next(
+                (
+                    decision
+                    for decision in decisions
+                    if decision.actor_id == cue.actor_id and decision.seq > cue.seq
+                ),
+                None,
+            )
+            ordered_cues += next_decision is not None
+        diagnostics = [event for event in events if event.type == "agent_reflex_diagnostic"]
+        epistemic_ok = 0
+        for event in diagnostics:
+            boundary = event.payload.get("reality_boundary", {})
+            writable = boundary.get("canonical_fact_write_statuses", [])
+            noncanonical = set(boundary.get("noncanonical_statuses", []))
+            epistemic_ok += writable == ["canonical"] and {
+                "observed",
+                "remembered",
+                "imagined",
+                "inferred",
+            } <= noncanonical
+        provider_configured = [
+            event
+            for event in decisions
+            if event.payload.get("deliberation_gate", {}).get("provider_available") is True
+        ]
+        provider_skipped = [event for event in provider_configured if event.payload.get("llm_skip")]
+        skill_decisions = [
+            event for event in decisions if event.payload.get("selected_skill")
+        ]
+        guided_skill_decisions = [
+            event
+            for event in skill_decisions
+            if event.payload.get("skill_after_outcome", {}).get("control_source")
+            == "guided_llm"
+        ]
+        automatic_skill_decisions = [
+            event
+            for event in skill_decisions
+            if event.payload.get("skill_after_outcome", {}).get("control_source")
+            == "automatic_skill"
+        ]
+        new_context_guidance = [
+            event
+            for event in skill_decisions
+            if event.payload.get("selected_skill", {}).get("reason")
+            == "skill_known_but_context_is_new"
+            and event.payload.get("decision_path") == "llm_deliberation"
+        ]
+        stage_transitions = Counter(
+            f"{event.payload['selected_skill'].get('stage', 'unknown')}->"
+            f"{event.payload['skill_after_outcome'].get('stage', 'unknown')}"
+            for event in skill_decisions
+            if event.payload.get("skill_after_outcome")
+        )
+        return {
+            "applicable": bool(grounded or diagnostics or skill_decisions),
+            "stimulus_grounding_rate": _clamp(len(grounded) / len(decisions)),
+            "fast_appraisal_rate": _clamp(
+                sum(bool(event.payload.get("fast_appraisal")) for event in decisions)
+                / len(decisions)
+            ),
+            "deliberation_gate_coverage": _clamp(
+                sum(bool(event.payload.get("deliberation_gate")) for event in decisions)
+                / len(decisions)
+            ),
+            "observable_cue_rate": _clamp(len(cue_events) / max(1, len(grounded))),
+            "cue_before_deliberation_rate": _clamp(
+                ordered_cues / max(1, len(cue_events))
+            ),
+            "cue_ambiguity_contract_rate": _clamp(
+                sum(
+                    event.payload.get("interpretation_policy")
+                    == "ambiguous_nonverbal_signal_not_truth_or_lie_oracle"
+                    for event in cue_events
+                )
+                / max(1, len(cue_events))
+            ),
+            "epistemic_boundary_rate": _clamp(
+                epistemic_ok / max(1, len(diagnostics))
+            ),
+            "provider_skip_rate": (
+                _clamp(len(provider_skipped) / len(provider_configured))
+                if provider_configured
+                else None
+            ),
+            "skill_instrumentation_rate": _clamp(
+                len(skill_decisions) / len(decisions)
+            ),
+            "automatic_skill_takeover_rate": _clamp(
+                len(automatic_skill_decisions) / max(1, len(skill_decisions))
+            ),
+            "guided_skill_decisions": len(guided_skill_decisions),
+            "automatic_skill_decisions": len(automatic_skill_decisions),
+            "new_context_guidance_decisions": len(new_context_guidance),
+            "skill_stage_transitions": dict(stage_transitions),
+            "modalities_observed": modalities,
+            "stimulus_decisions": len(grounded),
+            "observable_cue_events": len(cue_events),
+            "evidence": "engine_event_proxy_human_panel_required",
         }
 
     def _language_behavior(
@@ -637,7 +811,9 @@ class MatchEvaluator:
             substantive_scores.append(0.65 * length_score + 0.35 * lexical_variety)
         substantive_expression = sum(substantive_scores) / len(substantive_scores)
         autonomous_utterance_rate = sum(
-            bool(event.payload.get("utterance")) for event in decisions
+            bool(event.payload.get("utterance"))
+            and event.payload.get("decision_source") == "llm"
+            for event in decisions
         ) / max(1, len(responses))
 
         components = {
@@ -1043,6 +1219,228 @@ class MatchEvaluator:
             + 0.04 * profile["delayed_consequence_realization"]
         )
         return score, profile
+
+    def _town_assessment(
+        self,
+        decisions: list[GameEvent],
+        action_events: list[GameEvent],
+        events: list[GameEvent],
+        players: list[Player],
+    ) -> dict[str, Any]:
+        world_events = [
+            event for event in events if event.type.startswith("town_world_")
+        ]
+        expected_categories = {
+            "mayor_speech",
+            "policy",
+            "world_news",
+            "accident",
+            "weather",
+            "natural_disaster",
+            "town_announcement",
+            "unexpected_event",
+            "news",
+        }
+        categories = {
+            str(event.payload.get("category")) for event in world_events
+        }
+        event_family_coverage = _clamp(
+            len(categories & expected_categories) / len(expected_categories)
+        )
+        causal_traceability = _clamp(
+            sum(
+                bool(event.payload.get("rule_id"))
+                and isinstance(event.payload.get("causes"), list)
+                for event in world_events
+            )
+            / max(1, len(world_events))
+        )
+        agent_count = sum(player.kind == ActorKind.AGENT for player in players)
+        local_events = [
+            event
+            for event in world_events
+            if event.payload.get("delivery") == "local"
+        ]
+        scoped_local_delivery = _clamp(
+            sum(
+                len(event.payload.get("visible_to", [])) < len(players)
+                for event in local_events
+            )
+            / max(1, len(local_events))
+        )
+        environment_models = [
+            event.payload.get("world_model", {}).get("environment", {})
+            for event in decisions
+        ]
+        world_model_grounding = _clamp(
+            sum(
+                model.get("knowledge_scope")
+                == "observed_local_or_received_broadcast_not_omniscient"
+                and bool(model.get("clock"))
+                and bool(model.get("weather"))
+                for model in environment_models
+            )
+            / max(1, len(environment_models))
+        )
+        incident_events = [
+            event
+            for event in world_events
+            if event.payload.get("category")
+            in {"accident", "natural_disaster", "unexpected_event"}
+        ]
+        incident_ids = {
+            str(event.payload.get("event_id")) for event in incident_events
+        }
+        responses = [
+            event for event in events if event.type == "town_incident_response"
+        ]
+        responded_ids = {
+            str(event.payload.get("incident_id")) for event in responses
+        }
+        resolved_ids = {
+            str(event.payload.get("incident_id"))
+            for event in responses
+            if event.payload.get("resolved") is True
+        }
+        incident_response_rate = _clamp(
+            len(responded_ids & incident_ids) / max(1, len(incident_ids))
+        )
+        incident_resolution_rate = _clamp(
+            len(resolved_ids & incident_ids) / max(1, len(incident_ids))
+        )
+        reaction_types = {
+            str(event.payload.get("action_type"))
+            for event in action_events
+            if event.payload.get("action_type")
+            in {
+                "respond_incident",
+                "seek_shelter",
+                "check_bulletin",
+                "support_neighbor",
+            }
+        }
+        reaction_diversity = _clamp(len(reaction_types) / 4)
+        social_action_types = {
+            str(event.payload.get("action_type"))
+            for event in action_events
+            if event.payload.get("action_type")
+            in {
+                "check_phone",
+                "publish_post",
+                "reshare_post",
+                "comment_post",
+                "verify_claim",
+                "investigate_claim",
+            }
+        }
+        social_action_diversity = _clamp(len(social_action_types) / 6)
+        rumor_events = [event for event in events if event.type == "town_rumor_seeded"]
+        verification_events = [
+            event
+            for event in events
+            if event.type in {"town_claim_verified", "town_claim_officially_corrected"}
+        ]
+        investigation_events = [
+            event for event in events if event.type == "town_claim_investigated"
+        ]
+        evidence_acquisition = _clamp(
+            sum(bool(event.payload.get("evidence_event_id")) for event in investigation_events)
+            / max(1, len(investigation_events))
+        )
+        verified_false_claims = {
+            str(event.payload.get("claim_id"))
+            for event in verification_events
+            if event.payload.get("result") == "verified_false"
+        }
+        rumor_claims = {
+            str(event.payload.get("claim_id")) for event in rumor_events
+        }
+        rumor_correction_rate = (
+            _clamp(len(verified_false_claims & rumor_claims) / len(rumor_claims))
+            if rumor_claims
+            else None
+        )
+        reshares = [event for event in events if event.type == "town_social_reshared"]
+        provenance_preservation = _clamp(
+            sum(bool(event.payload.get("parent_post_id")) for event in reshares)
+            / max(1, len(reshares))
+        )
+        social_epistemic_grounding = _clamp(
+            sum(
+                bool(
+                    model.get("social_media", {}).get("epistemic_rule")
+                )
+                for model in environment_models
+            )
+            / max(1, len(environment_models))
+        )
+        first_identity_by_agent: dict[str, str] = {}
+        for event in decisions:
+            if event.actor_id and event.actor_id not in first_identity_by_agent:
+                first_identity_by_agent[event.actor_id] = str(
+                    event.payload.get("identity", {}).get("social_style", "")
+                )
+        identity_differentiation = _clamp(
+            len({value for value in first_identity_by_agent.values() if value})
+            / max(1, agent_count)
+        )
+        matrices = [
+            event.payload.get("psychological_matrix", {})
+            for event in decisions
+            if event.payload.get("psychological_matrix")
+        ]
+        response_ranges = []
+        for key in ("stress", "fear", "arousal", "uncertainty"):
+            values = [float(matrix.get(key, 0.0)) for matrix in matrices]
+            if values:
+                response_ranges.append(max(values) - min(values))
+        mean_response_range = sum(response_ranges) / max(1, len(response_ranges))
+        # Reward a visible but bounded trajectory. A flat line and unbounded volatility
+        # are both weak evidence of believable event response.
+        psychological_reactivity = _clamp(
+            1.0 - abs(mean_response_range - 0.30) / 0.30
+        )
+        composite = _clamp(
+            0.10 * event_family_coverage
+            + 0.10 * causal_traceability
+            + 0.10 * world_model_grounding
+            + 0.08 * scoped_local_delivery
+            + 0.07 * identity_differentiation
+            + 0.10 * incident_response_rate
+            + 0.07 * incident_resolution_rate
+            + 0.07 * reaction_diversity
+            + 0.07 * psychological_reactivity
+            + 0.07 * social_action_diversity
+            + 0.05 * provenance_preservation
+            + 0.04 * social_epistemic_grounding
+            + 0.05 * evidence_acquisition
+            + 0.03 * (rumor_correction_rate or 0.0)
+        )
+        return {
+            "composite": composite,
+            "semantics": "engine_proxy_not_human_panel_validation",
+            "world_events": len(world_events),
+            "event_categories": sorted(categories),
+            "event_family_coverage": event_family_coverage,
+            "causal_traceability": causal_traceability,
+            "world_model_grounding": world_model_grounding,
+            "scoped_local_delivery": scoped_local_delivery,
+            "identity_differentiation": identity_differentiation,
+            "incidents": len(incident_ids),
+            "incident_response_rate": incident_response_rate,
+            "incident_resolution_rate": incident_resolution_rate,
+            "reaction_diversity": reaction_diversity,
+            "psychological_reactivity": psychological_reactivity,
+            "social_action_diversity": social_action_diversity,
+            "social_epistemic_grounding": social_epistemic_grounding,
+            "provenance_preservation": provenance_preservation,
+            "rumors": len(rumor_claims),
+            "rumor_correction_rate": rumor_correction_rate,
+            "verification_events": len(verification_events),
+            "investigation_events": len(investigation_events),
+            "evidence_acquisition": evidence_acquisition,
+            "agent_count": agent_count,
+        }
 
     def _interview_assessment(
         self,

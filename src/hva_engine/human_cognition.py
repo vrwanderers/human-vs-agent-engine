@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import math
-import re
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+from hva_engine.memory_store import (
+    InMemoryIndexedMemoryStore,
+    LongTermMemoryStore,
+    MemoryDocument,
+    tokenize_memory_text,
+)
 
 
 def _clamp(value: float) -> float:
@@ -13,11 +20,107 @@ def _clamp(value: float) -> float:
 
 
 def _tokens(value: str) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[a-zA-Z0-9_\u4e00-\u9fff]+", value.lower())
-        if len(token) > 1
+    return tokenize_memory_text(value)
+
+
+def _memory_summary(content: str, action: str, outcome_events: tuple[str, ...]) -> str:
+    normalized = " ".join(content.strip().split())
+    if not normalized:
+        normalized = f"Action {action} led to {','.join(outcome_events) or 'a state change'}"
+    return normalized if len(normalized) <= 180 else f"{normalized[:177].rstrip()}..."
+
+
+def _memory_categories(
+    content: str,
+    action: str,
+    outcome_events: tuple[str, ...],
+    tags: tuple[str, ...],
+) -> tuple[str, ...]:
+    text = " ".join((content, action, *outcome_events, *tags)).lower()
+    text_tokens = _tokens(text)
+
+    def contains(keyword: str) -> bool:
+        if any("\u4e00" <= character <= "\u9fff" for character in keyword):
+            return keyword in text
+        return any(
+            token == keyword or (len(keyword) >= 5 and token.startswith(keyword))
+            for token in text_tokens
+        )
+
+    categories = {"experience"}
+    keyword_groups = {
+        "identity": (
+            "identity",
+            "family",
+            "childhood",
+            "origin",
+            "身份",
+            "家庭",
+            "童年",
+            "身世",
+            "故乡",
+        ),
+        "relationship": (
+            "trust",
+            "ally",
+            "betray",
+            "opponent",
+            "friend",
+            "信任",
+            "盟友",
+            "背叛",
+            "对手",
+            "朋友",
+        ),
+        "family": (
+            "family",
+            "parent",
+            "mother",
+            "father",
+            "spouse",
+            "child",
+            "daughter",
+            "son",
+            "家庭",
+            "父亲",
+            "母亲",
+            "伴侣",
+            "孩子",
+            "女儿",
+            "儿子",
+        ),
+        "emotion": (
+            "fear",
+            "anger",
+            "stress",
+            "frustrat",
+            "shame",
+            "恐惧",
+            "愤怒",
+            "压力",
+            "沮丧",
+            "羞耻",
+        ),
+        "world": (
+            "crisis",
+            "country",
+            "virus",
+            "court",
+            "rule",
+            "危机",
+            "国家",
+            "病毒",
+            "宫廷",
+            "规则",
+        ),
     }
+    for category, keywords in keyword_groups.items():
+        if any(contains(keyword) for keyword in keywords):
+            categories.add(category)
+    strategic_terms = ("goal", "plan", "strategy", "目标", "计划", "策略")
+    if action or any(contains(token) for token in strategic_terms):
+        categories.add("strategy")
+    return tuple(sorted(categories))
 
 
 class MemoryKind(StrEnum):
@@ -45,6 +148,13 @@ class CognitiveMemory:
     emotional_valence: float
     surprise: float
     tags: tuple[str, ...] = ()
+    summary: str = ""
+    categories: tuple[str, ...] = ()
+    stored_long_term: bool = False
+    recency_distance: int = 0
+    epistemic_status: str = "experienced"
+    source: str = "runtime_memory"
+    supporting_fact_id: str | None = None
     last_access_turn: int = 0
     access_count: int = 0
 
@@ -61,6 +171,12 @@ class CognitiveMemory:
             "emotional_valence": round(self.emotional_valence, 3),
             "surprise": round(self.surprise, 3),
             "tags": list(self.tags),
+            "summary": self.summary,
+            "categories": list(self.categories),
+            "storage_tier": "long_term" if self.stored_long_term else "short_term",
+            "epistemic_status": self.epistemic_status,
+            "source": self.source,
+            "supporting_fact_id": self.supporting_fact_id,
         }
         if retrieval_score is not None:
             view["retrieval_score"] = round(retrieval_score, 3)
@@ -89,20 +205,190 @@ class Reflection:
 
 @dataclass
 class MemorySystem:
-    """Four-part memory with evidence-backed reflection and salience retrieval.
+    """TTL short-term memory plus owner-scoped indexed long-term memory.
 
     The implementation is deterministic so it can act as a testable baseline. An LLM may
     phrase a reflection later, but it cannot remove the evidence requirement.
     """
 
-    episodic_limit: int = 64
+    owner_id: str = "standalone"
+    store: LongTermMemoryStore = field(default_factory=InMemoryIndexedMemoryStore)
+    short_term_ttl_turns: int = 6
+    short_term_limit: int = 16
+    long_term_promotion_threshold: float = 0.48
     reflection_threshold: float = 1.55
     episodic: list[CognitiveMemory] = field(default_factory=list)
     reflections: list[Reflection] = field(default_factory=list)
     procedural: dict[str, list[float]] = field(default_factory=dict)
     _unreflected_importance: float = 0.0
-    _next_memory_id: int = 1
-    _next_reflection_id: int = 1
+    _forgotten_short_term: int = 0
+
+    def __post_init__(self) -> None:
+        if self.short_term_ttl_turns < 1:
+            raise ValueError("short_term_ttl_turns must be at least 1")
+        if self.short_term_limit < 1:
+            raise ValueError("short_term_limit must be at least 1")
+        if self.reflections:
+            return
+        documents = self.store.list_by_category(self.owner_id, "reflection", limit=12)
+        self.reflections = [
+            Reflection(
+                id=document.id,
+                turn=document.turn,
+                belief=document.content,
+                confidence=float(document.metadata.get("confidence", 0.5)),
+                evidence_memory_ids=tuple(document.metadata.get("evidence_memory_ids", ())),
+                revision_of=document.metadata.get("revision_of"),
+            )
+            for document in reversed(documents)
+        ]
+
+    @staticmethod
+    def _from_document(document: MemoryDocument) -> CognitiveMemory:
+        return CognitiveMemory(
+            id=document.id,
+            turn=document.turn,
+            kind=MemoryKind(document.kind),
+            content=document.content,
+            action=document.action,
+            outcome_events=document.outcome_events,
+            score_delta=document.score_delta,
+            importance=document.importance,
+            emotional_valence=document.emotional_valence,
+            surprise=document.surprise,
+            tags=document.tags,
+            summary=document.summary,
+            categories=document.categories,
+            stored_long_term=True,
+            last_access_turn=document.last_access_turn,
+            access_count=document.access_count,
+            epistemic_status=str(
+                document.metadata.get("epistemic_status", "experienced")
+            ),
+            source=str(document.metadata.get("source", "runtime_memory")),
+            supporting_fact_id=document.metadata.get("supporting_fact_id"),
+        )
+
+    def forget_expired(self, current_turn: int) -> int:
+        retained = [
+            memory
+            for memory in self.episodic
+            if current_turn - memory.turn <= self.short_term_ttl_turns
+        ]
+        forgotten = len(self.episodic) - len(retained)
+        if forgotten:
+            self.episodic = retained
+            self._forgotten_short_term += forgotten
+        return forgotten
+
+    def seed_identity_memories(
+        self,
+        identity: Any,
+        *,
+        formative_fact_ids: dict[str, str] | None = None,
+        lived_fact_ids: dict[str, str] | None = None,
+    ) -> None:
+        """Index canonical identity memories without turning them into scripted behavior."""
+
+        identity_scope = str(identity.character_card_id or identity.name)
+
+        def stable_id(kind: str, title: str) -> str:
+            value = f"{self.owner_id}|{identity_scope}|{kind}|{title}"
+            return f"autobio-{hashlib.sha256(value.encode('utf-8')).hexdigest()[:24]}"
+
+        background_content = " ".join(
+            (
+                str(identity.background),
+                f"Aspiration: {identity.aspiration}",
+                f"Core wound: {identity.core_wound}",
+                f"Values: {', '.join(identity.values)}",
+            )
+        )
+        self.store.upsert(
+            MemoryDocument(
+                owner_id=self.owner_id,
+                id=stable_id("background", "identity_background"),
+                turn=0,
+                kind=MemoryKind.SEMANTIC.value,
+                summary=_memory_summary(background_content, "", ()),
+                content=background_content,
+                action="",
+                outcome_events=(),
+                score_delta=0.0,
+                importance=0.86,
+                emotional_valence=0.0,
+                surprise=0.0,
+                categories=("autobiographical", "identity"),
+                tags=("background", *identity.values),
+                metadata={
+                    "source": "canonical_identity_seed",
+                    "epistemic_status": "canonical_identity",
+                    "immutable": True,
+                    "memory_role": "background",
+                },
+            )
+        )
+        for memory_role, memories, fact_ids in (
+            (
+                "formative",
+                identity.formative_memories,
+                formative_fact_ids or {},
+            ),
+            ("lived", identity.lived_memories, lived_fact_ids or {}),
+        ):
+            for memory in memories:
+                content = " ".join(
+                    part
+                    for part in (
+                        f"{memory.title}: {memory.recollection}",
+                        f"Lesson: {memory.lesson}",
+                        f"People: {', '.join(memory.people)}" if memory.people else "",
+                        f"Place: {memory.place}" if memory.place else "",
+                        f"Time: {memory.time_period}" if memory.time_period else "",
+                    )
+                    if part
+                )
+                tags = tuple(
+                    dict.fromkeys(
+                        (
+                            memory.title,
+                            *memory.people,
+                            *memory.themes,
+                            *((memory.place,) if memory.place else ()),
+                        )
+                    )
+                )
+                categories = tuple(
+                    sorted(
+                        set(_memory_categories(content, "", (), tags))
+                        | {"autobiographical", "identity", f"{memory_role}_memory"}
+                    )
+                )
+                self.store.upsert(
+                    MemoryDocument(
+                        owner_id=self.owner_id,
+                        id=stable_id(memory_role, memory.title),
+                        turn=0,
+                        kind=MemoryKind.EPISODIC.value,
+                        summary=_memory_summary(content, "", ()),
+                        content=content,
+                        action="",
+                        outcome_events=(),
+                        score_delta=0.0,
+                        importance=0.9 if memory_role == "formative" else 0.76,
+                        emotional_valence=memory.emotional_valence,
+                        surprise=0.0,
+                        categories=categories,
+                        tags=tags,
+                        metadata={
+                            "source": "canonical_identity_seed",
+                            "epistemic_status": "canonical_autobiographical_memory",
+                            "immutable": True,
+                            "memory_role": memory_role,
+                            "supporting_fact_id": fact_ids.get(memory.title),
+                        },
+                    )
+                )
 
     def record(
         self,
@@ -115,6 +401,11 @@ class MemorySystem:
         surprise: float,
         emotional_intensity: float,
         tags: tuple[str, ...] = (),
+        kind: MemoryKind = MemoryKind.EPISODIC,
+        extra_categories: tuple[str, ...] = (),
+        force_long_term: bool = False,
+        track_procedural: bool = True,
+        metadata: dict[str, Any] | None = None,
     ) -> CognitiveMemory:
         importance = _clamp(
             0.18
@@ -123,24 +414,67 @@ class MemorySystem:
             + 0.24 * emotional_intensity
         )
         valence = max(-1.0, min(1.0, score_delta - 0.25 * surprise))
+        event_tuple = tuple(outcome_events)
+        summary = _memory_summary(content, action, event_tuple)
+        categories = tuple(
+            sorted(
+                set(_memory_categories(content, action, event_tuple, tags))
+                | set(extra_categories)
+            )
+        )
+        self.forget_expired(turn)
         memory = CognitiveMemory(
-            id=f"memory-{self._next_memory_id:04d}",
+            id=self.store.allocate_id(self.owner_id),
             turn=turn,
-            kind=MemoryKind.EPISODIC,
+            kind=kind,
             content=content,
             action=action,
-            outcome_events=tuple(outcome_events),
+            outcome_events=event_tuple,
             score_delta=score_delta,
             importance=importance,
             emotional_valence=valence,
             surprise=surprise,
             tags=tags,
+            summary=summary,
+            categories=categories,
+            epistemic_status=str((metadata or {}).get("epistemic_status", "experienced")),
+            source=str((metadata or {}).get("source", "runtime_memory")),
+            supporting_fact_id=(metadata or {}).get("supporting_fact_id"),
         )
-        self._next_memory_id += 1
         self.episodic.append(memory)
-        self.episodic = self.episodic[-self.episodic_limit :]
-        self.procedural.setdefault(action, []).append(score_delta - 0.15 * surprise)
-        self.procedural[action] = self.procedural[action][-20:]
+        if len(self.episodic) > self.short_term_limit:
+            self._forgotten_short_term += len(self.episodic) - self.short_term_limit
+            self.episodic = self.episodic[-self.short_term_limit :]
+        promote = (
+            force_long_term
+            or importance >= self.long_term_promotion_threshold
+            or surprise >= 0.8
+            or bool({"identity", "relationship"} & set(categories))
+        )
+        if promote:
+            memory.stored_long_term = True
+            self.store.upsert(
+                MemoryDocument(
+                    owner_id=self.owner_id,
+                    id=memory.id,
+                    turn=memory.turn,
+                    kind=memory.kind.value,
+                    summary=memory.summary,
+                    content=memory.content,
+                    action=memory.action,
+                    outcome_events=memory.outcome_events,
+                    score_delta=memory.score_delta,
+                    importance=memory.importance,
+                    emotional_valence=memory.emotional_valence,
+                    surprise=memory.surprise,
+                    categories=memory.categories,
+                    tags=memory.tags,
+                    metadata={"source": "agent_experience", **(metadata or {})},
+                )
+            )
+        if track_procedural and action:
+            self.procedural.setdefault(action, []).append(score_delta - 0.15 * surprise)
+            self.procedural[action] = self.procedural[action][-20:]
         self._unreflected_importance += importance
         return memory
 
@@ -152,12 +486,52 @@ class MemorySystem:
         mood_valence: float = 0.0,
         limit: int = 4,
     ) -> list[dict[str, Any]]:
+        self.forget_expired(current_turn)
         query_tokens = _tokens(query)
+        long_term_documents = self.store.query(
+            self.owner_id,
+            terms=query_tokens,
+            recent_limit=max(12, limit * 4),
+            candidate_limit=max(48, limit * 16),
+        )
+        long_term_documents = [
+            document
+            for document in long_term_documents
+            if document.metadata.get("source") != "canonical_identity_seed"
+            or bool(query_tokens & document.terms)
+        ]
+        long_term_ids = {document.id for document in long_term_documents}
+        latest_order = max(
+            (document.created_order for document in long_term_documents), default=0
+        )
+        candidates = {
+            document.id: self._from_document(document)
+            for document in long_term_documents
+        }
+        for document in long_term_documents:
+            candidates[document.id].recency_distance = max(
+                0, latest_order - document.created_order
+            )
+        candidates.update({memory.id: memory for memory in self.episodic})
+        short_term_ids = {memory.id for memory in self.episodic}
         ranked: list[tuple[float, CognitiveMemory]] = []
-        for memory in self.episodic:
-            age = max(0, current_turn - memory.turn)
-            recency = math.exp(-age / 8)
-            memory_tokens = _tokens(" ".join((memory.content, memory.action, *memory.tags)))
+        for memory in candidates.values():
+            if memory.id in short_term_ids:
+                age = max(0, current_turn - memory.turn)
+                recency = math.exp(-age / 8)
+            else:
+                recency = math.exp(-memory.recency_distance / 8)
+            memory_tokens = _tokens(
+                " ".join(
+                    (
+                        memory.summary,
+                        memory.content,
+                        memory.action,
+                        *memory.categories,
+                        *memory.tags,
+                    )
+                )
+            )
             relevance = (
                 len(query_tokens & memory_tokens) / max(1, len(query_tokens | memory_tokens))
             )
@@ -168,12 +542,21 @@ class MemorySystem:
         for _score, memory in selected:
             memory.last_access_turn = current_turn
             memory.access_count += 1
+            if memory.id in long_term_ids:
+                self.store.touch(self.owner_id, memory.id, current_turn)
         return [memory.public_view(score) for score, memory in selected]
 
     def maybe_reflect(self, turn: int) -> Reflection | None:
-        if self._unreflected_importance < self.reflection_threshold or len(self.episodic) < 2:
+        self.forget_expired(turn)
+        available = list(reversed(self.episodic))
+        evidence_ids = {memory.id for memory in available}
+        for document in self.store.list_by_category(self.owner_id, "experience", limit=12):
+            if document.id not in evidence_ids:
+                available.append(self._from_document(document))
+                evidence_ids.add(document.id)
+        if self._unreflected_importance < self.reflection_threshold or len(available) < 2:
             return None
-        evidence = sorted(self.episodic[-6:], key=lambda item: item.importance, reverse=True)[:3]
+        evidence = sorted(available[:6], key=lambda item: item.importance, reverse=True)[:3]
         action_counts = Counter(item.action for item in evidence)
         action = action_counts.most_common(1)[0][0]
         mean_delta = sum(item.score_delta for item in evidence) / len(evidence)
@@ -186,7 +569,7 @@ class MemorySystem:
         )
         previous = self.reflections[-1] if self.reflections else None
         reflection = Reflection(
-            id=f"reflection-{self._next_reflection_id:04d}",
+            id=self.store.allocate_id(self.owner_id, "reflection"),
             turn=turn,
             belief=(
                 f"Under recent conditions, {action} {direction}; "
@@ -196,25 +579,59 @@ class MemorySystem:
             evidence_memory_ids=tuple(item.id for item in evidence),
             revision_of=previous.id if previous and action in previous.belief else None,
         )
-        self._next_reflection_id += 1
         self.reflections.append(reflection)
         self.reflections = self.reflections[-12:]
+        self.store.upsert(
+            MemoryDocument(
+                owner_id=self.owner_id,
+                id=reflection.id,
+                turn=reflection.turn,
+                kind=MemoryKind.SEMANTIC.value,
+                summary=reflection.belief,
+                content=reflection.belief,
+                action=action,
+                outcome_events=(),
+                score_delta=mean_delta,
+                importance=reflection.confidence,
+                emotional_valence=max(-1.0, min(1.0, mean_delta)),
+                surprise=0.0,
+                categories=("reflection", "strategy"),
+                tags=(action,),
+                metadata={
+                    "confidence": reflection.confidence,
+                    "evidence_memory_ids": list(reflection.evidence_memory_ids),
+                    "revision_of": reflection.revision_of,
+                },
+            )
+        )
         self._unreflected_importance = 0.0
         return reflection
 
     def procedural_values(self) -> dict[str, float]:
-        return {
+        short_term_values = {
             action: sum(values) / len(values)
             for action, values in self.procedural.items()
             if values
         }
+        durable_values = self.store.action_values(self.owner_id)
+        for action, value in short_term_values.items():
+            durable_values.setdefault(action, value)
+        return durable_values
 
     def public_view(self) -> dict[str, Any]:
         return {
             "working_memory_policy": "current observation plus retrieved items",
+            "short_term": {
+                "active_count": len(self.episodic),
+                "ttl_turns": self.short_term_ttl_turns,
+                "capacity": self.short_term_limit,
+                "forgotten_count": self._forgotten_short_term,
+            },
+            "long_term": self.store.diagnostics(self.owner_id),
             "episodic_count": len(self.episodic),
             "semantic_reflections": [item.public_view() for item in self.reflections[-4:]],
-            "procedural_actions": sorted(self.procedural),
+            "procedural_actions": sorted(self.procedural_values()),
+            "retrieval_policy": "inverted-index candidates then salience reranking",
         }
 
 
