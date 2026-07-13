@@ -46,6 +46,22 @@ class GameMod(ABC):
         """Default baseline policy. MODs override this with domain heuristics."""
         return rng.choice(legal)
 
+    def agent_psychological_signals(self, state: dict[str, Any], actor_id: str) -> dict[str, float]:
+        """Optional bounded adjustments applied to the Agent psychological matrix."""
+        return {}
+
+    def agent_narrative_affordances(
+        self, state: dict[str, Any], actor_id: str, legal: list[Action]
+    ) -> dict[str, dict[str, Any]]:
+        """Optional value, relationship, and delayed-cost metadata for legal actions."""
+        return {}
+
+    def agent_influence_affordances(
+        self, state: dict[str, Any], actor_id: str, legal: list[Action]
+    ) -> dict[str, dict[str, Any]]:
+        """Optional opportunities/risks for continuous, game-world social influence."""
+        return {}
+
     def manifest(self) -> dict[str, Any]:
         return {
             "id": self.id,
