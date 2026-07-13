@@ -1,0 +1,77 @@
+# 叙事人物决策校准（MVP-5）
+
+## 校准目标与证据边界
+
+本套件把著名文学、戏剧、电影和电视剧中的关键人物抉择转换为结构化“决策卡”，用于检验引擎是否能从动机冲突、承诺、秘密压力、人格倾向、处境评价和后果遗留推导出连贯选择。它测量的是**对人类创作叙事人物的拟合度**，不是现实人群行为，也不能证明 Agent 已达到真人水平。
+
+最终的人类感结论必须采用另一条独立证据链：真实玩家跨回合遥测、真人脚本、双盲配对比较和跨文化标注。`narrative_character_fidelity` 不得混入或冒充 `real_human_behavior_fidelity`。
+
+## 研究依据
+
+- [Character is Destiny / LIFECHOICE](https://aclanthology.org/2025.findings-emnlp.813/) 把角色理解落实为“给定前文与人物信息，预测下一项关键抉择”。本项目因此优先校准选择，而非只比较语气。
+- [NARRABENCH](https://aclanthology.org/2026.eacl-long.176/) 指出既有叙事评测对视角、揭露、事件和风格等能力覆盖不足，所以本套件额外记录人物弧光与秘密压力，且不把单一分数当成完整叙事能力。
+- [CharacterBox](https://aclanthology.org/2025.naacl-long.323/) 的动态虚拟世界设计支持“环境后果持续更新角色”的方向，对应本引擎的后果迟滞状态。
+- [CHATTER](https://aclanthology.org/2025.wnu-1.11/) 用人工验证的影视角色属性检验角色归因，启发本项目把人格、动机和情绪评价拆开测量。
+- [OpenToM](https://aclanthology.org/2024.acl-long.466/) 强调自然叙事中的动机行动与心理状态；[MORABLES](https://aclanthology.org/2025.emnlp-main.1411/) 则说明文学情境可用于道德推理评估。
+
+## 机制升级
+
+`NarrativeDynamics` 是比单轮情绪更慢的角色状态：
+
+- 竞争动机：自保、真相、归属、自主、地位、责任、救赎、关怀；
+- 关系承诺与秘密压力；
+- 身份失调、怨恨、羞耻、道德创伤、希望和依恋；
+- 由多轮经历涌现的 `guarded / breaking / hardened / rationalizing / conflicted / repairing / opening` 人物弧光；
+- 行动后果记录，使同一处境在不同经历后产生不同偏好。
+
+它不会替代 MOD 规则：只对当前合法动作添加效用偏置，规则引擎仍是唯一裁判。上下文中的这一状态使用独立层，Agent 之间保持隔离；协作方只能通过共享黑板传播已经公开的事实。
+
+## 数据格式与版权门禁
+
+内置 `narrative_calibration_v1.json` 含 13 张原创结构化决策卡，覆盖小说、戏剧、电影和电视剧。每张卡只保存：作品元数据、短篇原创转述、人物状态、候选选择和观察到的选择；不保存原文、剧本、字幕、对白或长摘录。
+
+加载器只接受三种来源策略：
+
+- `public_domain_us_paraphrase`：公版作品的原创转述；
+- `copyrighted_metadata_only_paraphrase`：版权影视作品的公开元数据级转述；
+- `licensed_annotation`：用户另行取得许可的标注数据，仅本地导入。
+
+任何 `quote`、`raw_text`、`transcript`、`script` 或 `excerpt` 字段都会被拒绝。LIFECHOICE、CHATTER 等外部数据集若受版权或许可约束，应由实验者在本地转成相同 schema，不提交源文本到仓库。
+
+## 指标与防泄漏设计
+
+| 指标 | 含义 |
+|---|---|
+| `decision_match` | 是否预测关键人物的观察选择 |
+| `motive_ranking` | 观察选择在候选效用中的排序 |
+| `appraisal_fit` | 压力、愤怒、恐惧、羞耻、希望与标注锚点的接近度 |
+| `arc_transition` | 选择导致的人物弧光阶段是否匹配 |
+| `uncertainty_calibration` | 模型置信度是否尊重情境歧义 |
+
+预测器不读取 `observed_option`，测试会替换真值标签并验证预测不变。套件还与“永远选第一项”“只顾自保”“只守承诺”三个负面对照比较，并报告判别余量。
+
+## 当前结果与正确解读
+
+当前 13 例原型集的综合分为 `0.967`，决策匹配率 `1.000`，相对最强负面对照的判别余量为 `0.231`。这些高分来自同一轮人工设计的卡片、标签和规则权重，存在明显设计者泄漏与过拟合风险。4 例所谓 holdout 也只是作者预先划分，不是独立标注的真正盲测。
+
+因此 CLI 会强制输出：
+
+- `calibration_status=prototype_not_independently_annotated`
+- `not_real_human_behavior_data=true`
+- 已知局限和 holdout 警告
+
+运行：
+
+```bash
+python -m hva_engine.narrative_calibration
+python -m hva_engine.narrative_calibration --details
+# 安装后也可使用 hva-narrative-calibration
+```
+
+## 下一轮可信度升级
+
+1. 由至少两位不接触模型权重的标注者独立构造候选与标签，报告一致性。
+2. 在冻结模型后加入全新作品与全新人物作为真正 holdout。
+3. 对相同局面做机制消融：去掉动机冲突、秘密、承诺或后果遗留，验证分数是否按预期下降。
+4. 将叙事拟合与真人双盲 A/B 分开报告，并检验叙事高分是否真的提高玩家的可信感和继续互动意愿。
+5. 取得许可后扩充连续剧跨集决策、非英语作品、反英雄与合作群像，避免把少量西方经典误当成人类普遍心理。

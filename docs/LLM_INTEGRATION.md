@@ -78,8 +78,9 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 8. `appraisal_and_coping` / `situation_activated_traits`：评价、应对、心理矩阵和情境人格
 9. `semantic_reflections` / `persistent_plan`：引用情景证据的反思和跨回合计划
 10. `social_beliefs`：可错的信任、尊重、敌意、真诚度和对手行为信念
-11. `current_observation` / `deliberation_protocol`：观察、快慢模式与有限理性协议
-12. `legal_actions`：规范化动作列表及 JSON 输出协议
+11. `narrative_dynamics`：竞争动机、承诺、秘密压力、身份失调和行动后果遗留
+12. `current_observation` / `deliberation_protocol`：观察、快慢模式与有限理性协议
+13. `legal_actions`：规范化动作列表及 JSON 输出协议
 
 系统/规则/角色进入 system message，其余进入 user message。观察值使用“不可信数据”标记，防止游戏文本或直播输入覆盖上层指令。
 
@@ -100,7 +101,7 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 - 固定保留系统安全、规则、角色、当前观察和合法动作；
 - 认知层先按时近性、重要性、相关性和情绪一致性选择至多 4 条情景记忆；
 - 只把检索结果注入 Provider，未选中的私有经历不会因为靠近上下文尾部而自动进入；
-- 事实图谱、评价/应对、反思、计划、社会信念、当前观察和合法动作分别分配字符预算；
+- 事实图谱、评价/应对、反思、计划、社会信念、人物动力、当前观察和合法动作分别分配字符预算；
 - 总预算触顶时逐层压缩内容，但保留所有层级标题和首尾证据，不再从整段尾部截断；
 - 不用另一个 LLM 做摘要，避免摘要成本、漂移和跨 Agent 泄露；
 - 诊断字段记录是否压缩、压缩前条数、共享事实数和最终字符量。

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from random import Random
 from typing import Any
 
+from hva_engine.character_dynamics import NarrativeDynamics
 from hva_engine.cognition import (
     AgentIdentity,
     CognitiveProfile,
@@ -66,6 +67,7 @@ class AgentBrain:
     decision_mode: DecisionMode = DecisionMode.DELIBERATIVE
     retrieved_memories: list[dict[str, Any]] = field(default_factory=list)
     activated_traits: dict[str, Any] = field(default_factory=dict)
+    narrative_dynamics: NarrativeDynamics | None = None
     decisions: int = 0
     last_context: ContextPacket | None = None
     _match_id: str = ""
@@ -77,6 +79,10 @@ class AgentBrain:
     def __post_init__(self) -> None:
         if self.memory.maxlen != self.memory_limit:
             self.memory = deque(self.memory, maxlen=self.memory_limit)
+        if self.narrative_dynamics is None:
+            self.narrative_dynamics = NarrativeDynamics.from_identity(
+                self.identity, self.profile, "coop" in self.role
+            )
 
     def observe(
         self,
@@ -200,6 +206,12 @@ class AgentBrain:
             cooperative_signal=min(1.0, len(shared_facts or []) / 4),
             observed=bool(new_external_events),
         )
+        assert self.narrative_dynamics is not None
+        self.narrative_dynamics.update_before_decision(
+            self.last_appraisal,
+            self.cognition,
+            self.social_belief.trust,
+        )
         self._update_opponent_model(events)
         self._update_intention("coop" in self.role)
         self.plan.update(
@@ -271,6 +283,7 @@ class AgentBrain:
             "plan": self.plan.public_view(),
             "activated_traits": self.activated_traits,
             "decision_mode": self.decision_mode.value,
+            "narrative_dynamics": self.narrative_dynamics.public_view(),
             "mod_psychological_signals": {
                 key: round(value, 3) for key, value in mod_psychology.items()
             },
@@ -328,6 +341,7 @@ class AgentBrain:
             social_beliefs=self.social_belief.public_view(),
             activated_traits=self.activated_traits,
             decision_mode=self.decision_mode.value,
+            narrative_dynamics=self.narrative_dynamics.public_view(),
         )
         baseline_action = mod.agent_action(state, self.player_id, legal, rng)
         learned: dict[str, list[float]] = {}
@@ -336,6 +350,12 @@ class AgentBrain:
         averages = {key: sum(values) / len(values) for key, values in learned.items()}
         averages.update(self.memory_system.procedural_values())
         last_action = self.memory[-1].action if self.memory else None
+        narrative_biases = self.narrative_dynamics.action_biases(legal)
+        combined_identity_biases = {
+            action.type: self.identity.action_biases.get(action.type, 0.0)
+            + narrative_biases.get(action.type, 0.0)
+            for action in legal
+        }
         utilities, components = action_utilities(
             legal=legal,
             baseline=baseline_action,
@@ -344,7 +364,7 @@ class AgentBrain:
             profile=self.profile,
             cognition=self.cognition,
             policy=self.behavior_policy,
-            identity_biases=self.identity.action_biases,
+            identity_biases=combined_identity_biases,
             cooperative="coop" in self.role,
             rng=rng,
         )
@@ -484,6 +504,8 @@ class AgentBrain:
             "current_plan": self.plan.public_view(),
             "activated_traits": self.activated_traits,
             "decision_mode": self.decision_mode.value,
+            "narrative_dynamics": self.narrative_dynamics.public_view(),
+            "narrative_action_bias": round(narrative_biases.get(action.type, 0.0), 3),
             "intention": self.cognition.intention,
             "behavior_policy": self.behavior_policy.public_view(),
             "fact_graph": self.fact_graph.public_view(),
@@ -510,6 +532,10 @@ class AgentBrain:
                 "situation_activated_traits": bool(self.activated_traits),
                 "persistent_plan": self.plan.age > 0,
                 "expression_is_not_internal_state": response_plan["expression_gap"] > 0.01,
+                "motivational_conflict": (
+                    self.narrative_dynamics.active_conflict()["intensity"] > 0.15
+                ),
+                "consequence_hysteresis": bool(self.narrative_dynamics.consequence_trace),
             },
             "predicted_effect": prediction["description"],
             "prediction": prediction,
@@ -660,6 +686,14 @@ class AgentBrain:
             tags=(self.plan.goal, self.cognition.intention, self.role),
         )
         self.memory_system.maybe_reflect(turn)
+        assert self.narrative_dynamics is not None
+        self.narrative_dynamics.record_consequence(
+            action_type=action.type,
+            score_delta=score_after - score_before,
+            surprise=surprise,
+            cognition=self.cognition,
+            profile=self.profile,
+        )
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -675,6 +709,9 @@ class AgentBrain:
             "current_plan": self.plan.public_view(),
             "activated_traits": self.activated_traits,
             "decision_mode": self.decision_mode.value,
+            "narrative_dynamics": (
+                self.narrative_dynamics.public_view() if self.narrative_dynamics else None
+            ),
             "behavior_policy": self.behavior_policy.public_view(),
             "fact_graph": self.fact_graph.public_view(),
             "world_model": self.world_model,

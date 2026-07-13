@@ -29,6 +29,7 @@ dev = [
 [project.scripts]
 hva-benchmark = "hva_engine.benchmark:main"
 hva-llm-smoke = "hva_engine.llm_smoke:main"
+hva-narrative-calibration = "hva_engine.narrative_calibration:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hva_engine"]

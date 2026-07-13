@@ -115,11 +115,11 @@ def test_cross_match_evaluation_groups_by_mod_and_mode() -> None:
     assert summary["overall"]["composite_sd"] >= 0
 
 
-def test_agent_only_engagement_is_not_applicable_in_v4() -> None:
+def test_agent_only_engagement_is_not_applicable_in_v5() -> None:
     engine = build_default_engine()
     view = engine.create_match("debate_arena", seed=1, mode=MatchMode.AGENT_VS_AGENT)
     evaluation = engine.evaluation(view.id)
-    assert evaluation["version"] == "mvp-4"
+    assert evaluation["version"] == "mvp-5"
     assert evaluation["dimensions"]["player_engagement"] is None
     assert evaluation["valid_for_comparison"] is True
 

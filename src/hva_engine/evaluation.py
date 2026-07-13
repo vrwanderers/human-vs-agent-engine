@@ -55,7 +55,7 @@ def _clamp(value: float) -> float:
 
 
 class MatchEvaluator:
-    """MVP-4 evaluator: measures causal cognitive continuity, not fluent imitation."""
+    """MVP-5 evaluator: adds narrative motive conflicts and consequence hysteresis."""
 
     def evaluate(
         self,
@@ -226,7 +226,7 @@ class MatchEvaluator:
             "interview_assessment": mod_specific_profile,
         }
         return {
-            "version": "mvp-4",
+            "version": "mvp-5",
             "valid_for_comparison": rules_valid,
             "composite_score": composite,
             "weights": weights,
@@ -280,6 +280,9 @@ class MatchEvaluator:
                 "situation_trait_activation": 0.0,
                 "plan_persistence_and_replanning": 0.0,
                 "expression_internal_gap": 0.0,
+                "motivational_conflict": 0.0,
+                "consequence_hysteresis": 0.0,
+                "identity_dissonance": 0.0,
             }
             return 0.0, empty
 
@@ -428,6 +431,61 @@ class MatchEvaluator:
             if not gaps
             else sum(_clamp(1 - abs(gap - 0.16) / 0.22) for gap in gaps) / len(gaps)
         )
+        dynamics = [
+            event.payload.get("narrative_dynamics", {})
+            for event in decisions
+            if event.payload.get("narrative_dynamics")
+        ]
+        conflict_intensities = [
+            float(item.get("active_conflict", {}).get("intensity", 0.0))
+            for item in dynamics
+        ]
+        motivational_conflict = _clamp(
+            0.0
+            if not conflict_intensities
+            else sum(
+                _clamp(1 - abs(intensity - 0.48) / 0.48)
+                for intensity in conflict_intensities
+            )
+            / len(conflict_intensities)
+        )
+        legacy_deltas: list[float] = []
+        dissonance_values: list[float] = []
+        legacy_keys = ("identity_dissonance", "resentment", "shame", "moral_injury", "hope")
+        for agent_id in agents:
+            agent_decisions = [event for event in decisions if event.actor_id == agent_id]
+            for event in agent_decisions:
+                state = event.payload.get("narrative_dynamics", {})
+                if state:
+                    dissonance_values.append(float(state.get("identity_dissonance", 0.0)))
+            for previous, current in zip(agent_decisions, agent_decisions[1:], strict=False):
+                previous_state = previous.payload.get("narrative_dynamics", {})
+                current_state = current.payload.get("narrative_dynamics", {})
+                if previous_state and current_state:
+                    legacy_deltas.append(
+                        sum(
+                            abs(
+                                float(current_state.get(key, 0.0))
+                                - float(previous_state.get(key, 0.0))
+                            )
+                            for key in legacy_keys
+                        )
+                        / len(legacy_keys)
+                    )
+        mean_legacy_delta = sum(legacy_deltas) / max(1, len(legacy_deltas))
+        consequence_hysteresis = _clamp(
+            0.0 if not legacy_deltas else 1 - abs(mean_legacy_delta - 0.055) / 0.055
+        )
+        mean_dissonance = sum(dissonance_values) / max(1, len(dissonance_values))
+        dissonance_range = (
+            max(dissonance_values) - min(dissonance_values) if dissonance_values else 0.0
+        )
+        identity_dissonance = _clamp(
+            0.0
+            if not dissonance_values
+            else 0.55 * (1 - abs(mean_dissonance - 0.22) / 0.22)
+            + 0.45 * min(1.0, dissonance_range / 0.18)
+        )
 
         profile = {
             "persona_stability": _clamp(persona_stability),
@@ -445,23 +503,29 @@ class MatchEvaluator:
             "situation_trait_activation": situation_trait_activation,
             "plan_persistence_and_replanning": plan_persistence,
             "expression_internal_gap": expression_internal_gap,
+            "motivational_conflict": motivational_conflict,
+            "consequence_hysteresis": consequence_hysteresis,
+            "identity_dissonance": identity_dissonance,
         }
         score = _clamp(
-            0.07 * profile["persona_stability"]
-            + 0.07 * profile["identity_continuity"]
-            + 0.06 * profile["psychological_modeling"]
-            + 0.07 * profile["psychological_dynamics"]
-            + 0.05 * profile["opponent_modeling"]
-            + 0.05 * profile["intention_persistence"]
-            + 0.06 * profile["bounded_rationality"]
-            + 0.08 * profile["narrative_revelation"]
-            + 0.07 * profile["memory_retrieval_grounding"]
-            + 0.06 * profile["reflection_evidence"]
-            + 0.08 * profile["appraisal_emotion_coherence"]
-            + 0.06 * profile["social_belief_modeling"]
-            + 0.06 * profile["situation_trait_activation"]
-            + 0.08 * profile["plan_persistence_and_replanning"]
-            + 0.08 * profile["expression_internal_gap"]
+            0.05 * profile["persona_stability"]
+            + 0.05 * profile["identity_continuity"]
+            + 0.04 * profile["psychological_modeling"]
+            + 0.06 * profile["psychological_dynamics"]
+            + 0.04 * profile["opponent_modeling"]
+            + 0.04 * profile["intention_persistence"]
+            + 0.05 * profile["bounded_rationality"]
+            + 0.06 * profile["narrative_revelation"]
+            + 0.06 * profile["memory_retrieval_grounding"]
+            + 0.05 * profile["reflection_evidence"]
+            + 0.07 * profile["appraisal_emotion_coherence"]
+            + 0.05 * profile["social_belief_modeling"]
+            + 0.05 * profile["situation_trait_activation"]
+            + 0.06 * profile["plan_persistence_and_replanning"]
+            + 0.06 * profile["expression_internal_gap"]
+            + 0.07 * profile["motivational_conflict"]
+            + 0.07 * profile["consequence_hysteresis"]
+            + 0.07 * profile["identity_dissonance"]
         )
         return score, profile
 

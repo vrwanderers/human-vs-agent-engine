@@ -8,6 +8,8 @@
 - 6 维在线评价：玩家参与度、引擎通用性、动态性、虚拟玩家评价、AI 对手智能性、AI 人类感
 - 5 个 MVP MOD：`tactical_duel`、`racing_strategy`、`debate_arena`、`crisis_coop`、`adversarial_interview`
 - 论文驱动的 Agent 认知循环：四类记忆、证据反思、情绪评价/再评价、情境人格激活、社会信念、持续计划、快慢有限理性与结果复盘
+- 慢变量人物动力学：竞争动机、关系承诺、秘密压力、身份失调与行动后果会跨回合改变偏好并推动人物弧光
+- 独立叙事人物校准：用 13 个文学/影视关键抉择卡检验决策、动机、心理评价与弧光；明确不把虚构人物数据冒充真人行为
 - 渐进式角色故事揭露：关键回合、压力、受挫、信任和终局会产生 `story_reveal` 事件
 - 连续混合应对：采访中的七类策略是内部行为坐标，每次回答混合 2–4 类策略及情绪强度，而不是传统 NPC 的固定单选招式
 - 受约束的事实图谱：核心身世不可覆盖，自由发挥必须引用事实依据，可变事实保留修订链
@@ -121,11 +123,18 @@ uvicorn hva_engine.api:app --reload
 
 Docker 开发环境可用 `HVA_FACT_STORE=neo4j docker compose --profile neo4j up --build`。详细约束见 [事实图谱](docs/FACT_GRAPH.md)。
 
-运行评分 v4 的多种子镜像基准（对抗模式会交换双方席位）：
+运行评分 MVP-5 的多种子镜像基准（对抗模式会交换双方席位）：
 
 ```bash
 python -m hva_engine.benchmark --seeds 25
 # 安装后也可使用：hva-benchmark --seeds 25
+```
+
+运行不含作品原文的叙事人物决策校准：
+
+```bash
+python -m hva_engine.narrative_calibration
+# 安装后也可使用：hva-narrative-calibration
 ```
 
 ## 设计原则
@@ -136,7 +145,7 @@ python -m hva_engine.benchmark --seeds 25
 4. **直播输入也是动作源**：弹幕与 Godot、Web 控制台共享同一校验链路。
 5. **用 MVP 数据升级架构**：评价低分对应明确的下一轮改造方向。
 
-详细内容见 [研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
+详细内容见 [研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[叙事人物决策校准](docs/NARRATIVE_CHARACTER_CALIBRATION.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
 
 ## 弹幕命令
 
@@ -150,7 +159,7 @@ python -m hva_engine.benchmark --seeds 25
 
 ## 路线图
 
-- M1：采集真实玩家/Agent 双盲基线，校准评分 v4 与人类感各分量
+- M1：独立标注全新叙事人物 holdout，并采集真实玩家/Agent 双盲基线，分别校准叙事忠实度与真人感
 - M2：加入并行回合、隐藏信息、回放与持久化
 - M3：远程 LLM Agent 沙箱、Elo/Glicko 锦标赛和观众投票窗口
 - M4：MOD SDK、资产协议、直播平台正式适配器与 Godot 可视化组件库
