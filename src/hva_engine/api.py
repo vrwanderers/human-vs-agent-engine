@@ -11,9 +11,19 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from hva_engine.blind_eval import BlindSample, build_blind_evaluation_store_from_env
 from hva_engine.danmaku import dispatch_danmaku
 from hva_engine.engine import EngineError, build_default_engine
-from hva_engine.models import CreateMatchRequest, DanmakuRequest, MatchView, SubmitActionRequest
+from hva_engine.models import (
+    BlindRatingRequest,
+    CreateBlindTrialRequest,
+    CreateMatchRequest,
+    DanmakuRequest,
+    GameEvent,
+    MatchView,
+    PublishStimulusRequest,
+    SubmitActionRequest,
+)
 
 app = FastAPI(
     title="Human vs Agent Engine",
@@ -29,6 +39,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 engine = build_default_engine()
+blind_evaluations = build_blind_evaluation_store_from_env()
 static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -71,6 +82,11 @@ async def dashboard() -> FileResponse:
     return FileResponse(static_dir / "index.html")
 
 
+@app.get("/blind-eval", include_in_schema=False)
+async def blind_evaluation_page() -> FileResponse:
+    return FileResponse(static_dir / "blind_eval.html")
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
     return {
@@ -78,9 +94,12 @@ async def health() -> dict[str, object]:
         "mods": len(engine.mods),
         "matches": len(engine.matches),
         "fact_store": engine.fact_store.name,
+        "memory_store": engine.memory_store.backend_name,
+        "world_store": engine.world_store.backend_name,
         "agent_runtime": engine.agent_runtime,
         "llm_mods": sorted(engine.llm_mod_ids),
         "character_cards": len(engine.character_cards.cards),
+        "blind_evaluation_store": blind_evaluations.backend_name,
     }
 
 
@@ -106,9 +125,21 @@ async def create_match(request: CreateMatchRequest) -> MatchView:
                 request.mode,
                 agent_tuning=request.agent_tuning,
                 agent_characters=request.agent_characters,
+                human_memory_id=request.human_memory_id,
+                agent_memory_owner_ids=request.agent_memory_owner_ids,
+                world_id=request.world_id,
+                resume_world=request.resume_world,
             )
     except EngineError as exc:
         raise _bad_request(exc) from exc
+
+
+@app.get("/api/worlds/{world_id}")
+async def world_metadata(world_id: str) -> dict[str, object]:
+    try:
+        return engine.world_metadata(world_id)
+    except EngineError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/matches/{match_id}", response_model=MatchView)
@@ -145,6 +176,48 @@ async def evaluation_summary() -> dict[str, object]:
     return engine.evaluation_summary()
 
 
+@app.post("/api/evaluations/blind-trials", status_code=201)
+async def create_blind_trial(request: CreateBlindTrialRequest) -> dict[str, object]:
+    try:
+        return blind_evaluations.create_trial(
+            request.study_id,
+            BlindSample(
+                request.sample_a.condition_id,
+                tuple(request.sample_a.transcript),
+                request.sample_a.metadata,
+            ),
+            BlindSample(
+                request.sample_b.condition_id,
+                tuple(request.sample_b.transcript),
+                request.sample_b.metadata,
+            ),
+            request.seed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/evaluations/blind-ratings", status_code=201)
+async def submit_blind_rating(request: BlindRatingRequest) -> dict[str, object]:
+    try:
+        return blind_evaluations.submit_rating(request.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/evaluations/blind-trials/{trial_id}")
+async def get_blind_trial(trial_id: str) -> dict[str, object]:
+    trial = blind_evaluations.get_trial(trial_id)
+    if trial is None:
+        raise HTTPException(status_code=404, detail="Unknown blind trial")
+    return trial
+
+
+@app.get("/api/evaluations/blind-summary/{study_id}")
+async def blind_summary(study_id: str) -> dict[str, object]:
+    return blind_evaluations.summary(study_id)
+
+
 @app.get("/api/matches/{match_id}/agents/{agent_id}/context-preview")
 async def context_preview(
     match_id: str,
@@ -168,6 +241,28 @@ async def debug_match(
         return engine.debug_view(match_id)
     except EngineError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/debug/matches/{match_id}/stimuli", response_model=GameEvent)
+async def publish_debug_stimulus(
+    match_id: str,
+    request: PublishStimulusRequest,
+    x_hva_debug_token: str | None = Header(default=None),
+) -> GameEvent:
+    """Trusted development adapter; production sensory sources need their own auth."""
+
+    _require_debug_token(x_hva_debug_token)
+    try:
+        async with mutation_lock:
+            event = await run_in_threadpool(
+                engine.publish_stimulus,
+                match_id,
+                **request.model_dump(exclude_none=True),
+            )
+        await sockets.broadcast(match_id, engine.view(match_id))
+        return event
+    except EngineError as exc:
+        raise _bad_request(exc) from exc
 
 
 @app.get("/api/matches/{match_id}/agents/{agent_id}/fact-graph")

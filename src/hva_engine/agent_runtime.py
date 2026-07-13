@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from dataclasses import dataclass, field
+from hashlib import sha256
 from random import Random
 from time import perf_counter
 from typing import Any
@@ -30,11 +31,22 @@ from hva_engine.human_cognition import (
 from hva_engine.llm import LLMDecisionClient
 from hva_engine.models import Action, GameEvent
 from hva_engine.mods.base import GameMod
+from hva_engine.relationship_memory import RelationshipMemory, RelationshipProfile
+from hva_engine.skill_learning import SkillLearningSystem
 from hva_engine.social_influence import (
     InfluenceIntent,
     constrain_model_intent,
     derive_influence_intent,
     strategic_utility_bias,
+)
+from hva_engine.speech_style import SpeechStyleRealizer
+from hva_engine.stimulus import (
+    DeliberationDecision,
+    FastAppraisal,
+    RealityStatusGuard,
+    ReflexResponse,
+    StimulusFrame,
+    StimulusPipeline,
 )
 
 
@@ -50,6 +62,7 @@ class MemoryItem:
     predicted_events: list[str]
     surprise: float
     regret: float
+    expires_turn: int
 
 
 @dataclass
@@ -62,7 +75,9 @@ class AgentBrain:
     identity: AgentIdentity
     behavior_policy: RuntimeBehaviorPolicy
     fact_graph: AgentFactGraph
+    participant_directory: dict[str, dict[str, str]] = field(default_factory=dict)
     memory_limit: int = 12
+    short_term_ttl_turns: int = 6
     memory: deque[MemoryItem] = field(default_factory=lambda: deque(maxlen=12))
     world_model: dict[str, Any] = field(default_factory=dict)
     cognition: CognitiveState = field(default_factory=CognitiveState)
@@ -77,7 +92,19 @@ class AgentBrain:
     last_decision_tendencies: dict[str, Any] = field(default_factory=dict)
     last_outcome_reappraisal: dict[str, Any] = field(default_factory=dict)
     last_story_reveal_diagnostic: dict[str, Any] = field(default_factory=dict)
+    stimulus_pipeline: StimulusPipeline = field(default_factory=StimulusPipeline)
+    last_stimulus_frame: StimulusFrame = field(default_factory=StimulusFrame)
+    last_fast_appraisal: FastAppraisal = field(default_factory=FastAppraisal)
+    last_reflex_response: ReflexResponse = field(default_factory=ReflexResponse)
+    last_deliberation_gate: DeliberationDecision | None = None
+    skill_learning: SkillLearningSystem | None = None
+    last_skill_candidates: list[dict[str, Any]] = field(default_factory=list)
+    last_selected_skill: dict[str, Any] = field(default_factory=dict)
+    last_skill_update: dict[str, Any] = field(default_factory=dict)
+    last_plan_revised: bool = False
     narrative_dynamics: NarrativeDynamics | None = None
+    relationship_memory: RelationshipMemory | None = None
+    relationship_profiles: dict[str, RelationshipProfile] = field(default_factory=dict)
     decisions: int = 0
     last_context: ContextPacket | None = None
     _match_id: str = ""
@@ -93,6 +120,23 @@ class AgentBrain:
             self.narrative_dynamics = NarrativeDynamics.from_identity(
                 self.identity, self.profile, "coop" in self.role
             )
+        if self.relationship_memory is None:
+            self.relationship_memory = RelationshipMemory(
+                self.memory_system.owner_id, self.memory_system.store
+            )
+        if self.skill_learning is None:
+            self.skill_learning = SkillLearningSystem(
+                self.memory_system.owner_id, self.memory_system.store
+            )
+        self.memory_system.seed_identity_memories(
+            self.identity,
+            formative_fact_ids=self.fact_graph.formative_memory_fact_ids,
+            lived_fact_ids=self.fact_graph.lived_memory_fact_ids,
+        )
+
+    def _forget_expired_short_term(self, current_turn: int) -> None:
+        while self.memory and self.memory[0].expires_turn < current_turn:
+            self.memory.popleft()
 
     def observe(
         self,
@@ -104,6 +148,7 @@ class AgentBrain:
         shared_facts: list[SharedFact] | None = None,
     ) -> dict[str, Any]:
         turn = int(state.get("turn", len(events)))
+        self._forget_expired_short_term(turn)
         rivals = {pid: score for pid, score in scores.items() if pid != self.player_id}
         own_score = scores.get(self.player_id, 0.0)
         rival_best = max(rivals.values(), default=own_score)
@@ -182,6 +227,7 @@ class AgentBrain:
             for event in events
             if event.seq > self._observed_event_seq and event.actor_id != self.player_id
         ]
+        memory_query_cues = self._event_memory_cues(new_external_events)
         hostile_severity = max(
             (
                 float(event.payload.get("severity", 0.0))
@@ -190,6 +236,49 @@ class AgentBrain:
             ),
             default=0.0,
         )
+        self._ensure_relationship_profiles()
+        identity_themes = {
+            theme
+            for memory in (*self.identity.formative_memories, *self.identity.lived_memories)
+            for theme in memory.themes
+        }
+        identity_themes.update(self.identity.values)
+        sensitive_topics = {
+            point.topic
+            for profile in self.relationship_profiles.values()
+            for point in profile.sensitive_points.values()
+        }
+        self.last_stimulus_frame, self.last_fast_appraisal = self.stimulus_pipeline.perceive(
+            events,
+            viewer_id=self.player_id,
+            after_sequence=self._observed_event_seq,
+            identity_themes=identity_themes,
+            sensitive_topics=sensitive_topics,
+            stress=self.cognition.stress,
+            fear=self.cognition.fear,
+            uncertainty=self.cognition.uncertainty,
+        )
+        self.cognition.apply_adjustments(
+            {
+                "stress": 0.07 * self.last_fast_appraisal.threat
+                + 0.05 * self.last_fast_appraisal.social_threat,
+                "fear": 0.08 * self.last_fast_appraisal.threat,
+                "arousal": 0.10 * self.last_fast_appraisal.action_readiness,
+                "uncertainty": 0.05 * self.last_fast_appraisal.ambiguity,
+            }
+        )
+        active_relationship_actor = next(
+            (
+                event.actor_id
+                for event in reversed(new_external_events)
+                if event.actor_id in self.relationship_profiles
+            ),
+            next(iter(self.relationship_profiles), None),
+        )
+        if active_relationship_actor is not None and self.decisions == 0:
+            self._sync_social_belief(
+                self.relationship_profiles[active_relationship_actor], preserve_intent=True
+            )
         self.last_appraisal = appraise(
             score_delta=latest_delta,
             margin=margin,
@@ -216,15 +305,22 @@ class AgentBrain:
             cooperative_signal=min(1.0, len(shared_facts or []) / 4),
             observed=bool(new_external_events),
         )
+        self._update_opponent_model(events)
+        self._remember_relationship_events(
+            new_external_events,
+            current_turn=turn,
+            cooperative="coop" in self.role,
+        )
+        if active_relationship_actor is not None:
+            self._sync_social_belief(self.relationship_profiles[active_relationship_actor])
         assert self.narrative_dynamics is not None
         self.narrative_dynamics.update_before_decision(
             self.last_appraisal,
             self.cognition,
             self.social_belief.trust,
         )
-        self._update_opponent_model(events)
         self._update_intention("coop" in self.role)
-        self.plan.update(
+        self.last_plan_revised = self.plan.update(
             desired_goal=self.cognition.intention,
             surprise=self.cognition.surprise,
             stress=self.cognition.stress,
@@ -246,6 +342,11 @@ class AgentBrain:
         intention_fact = self.fact_graph.upsert_runtime(
             "state.current_intention", self.cognition.intention
         )
+        if self.relationship_profiles:
+            self.fact_graph.upsert_runtime(
+                "belief.relationship_impression",
+                {"profiles": self._relationship_fact_summaries()},
+            )
         self.fact_graph.upsert_runtime(
             "state.psychological_matrix", self.cognition.psychology_view()
         )
@@ -264,7 +365,7 @@ class AgentBrain:
             else "steady"
         )
         interpretation = self.fact_graph.propose(
-            subject=self.player_id,
+            subject="self",
             predicate="belief.interpretation",
             value={
                 "opponent_tendency": self.opponent_model.get("dominant_action"),
@@ -283,13 +384,18 @@ class AgentBrain:
             "score_margin": round(margin, 3),
             "terminal": mod.is_terminal(state),
             "recent_events": [event.type for event in events[-4:]],
+            "memory_query_cues": memory_query_cues,
             "objective": "shared_success" if "coop" in self.role else "outperform_opponents",
             "memory_depth": len(self.memory),
             "shared_fact_count": len(shared_facts or []),
             "belief_uncertainty": round(self.cognition.uncertainty, 3),
             "opponent_model": self.opponent_model,
             "social_belief": self.social_belief.public_view(),
+            "relationship_memory": self._relationship_views(),
             "appraisal": self.last_appraisal.public_view(),
+            "stimulus_frame": self.last_stimulus_frame.public_view(),
+            "fast_appraisal": self.last_fast_appraisal.public_view(),
+            "reality_boundary": RealityStatusGuard.context_contract(),
             "plan": self._plan_context(),
             "activated_traits": self.activated_traits,
             "decision_mode": self.decision_mode.value,
@@ -297,6 +403,7 @@ class AgentBrain:
             "mod_psychological_signals": {
                 key: round(value, 3) for key, value in mod_psychology.items()
             },
+            "environment": mod.agent_world_model(state, self.player_id),
         }
         self._match_id = match_id
         self._shared_facts = list(shared_facts or [])
@@ -321,6 +428,16 @@ class AgentBrain:
                 self.plan.subgoal,
                 *(action.type for action in legal),
                 *(self.world_model.get("recent_events", [])),
+                *(self.world_model.get("memory_query_cues", [])),
+                *(
+                    profile.attitude
+                    for profile in self.relationship_profiles.values()
+                ),
+                *(
+                    point.topic
+                    for profile in self.relationship_profiles.values()
+                    for point in profile.sensitive_points.values()
+                ),
             ]
         )
         self.retrieved_memories = self.memory_system.retrieve(
@@ -389,6 +506,74 @@ class AgentBrain:
         self.last_decision_tendencies = self._decision_tendencies(
             legal, utilities, components
         )
+        assert self.skill_learning is not None
+        self.last_skill_candidates = []
+        for action_index, candidate_action in enumerate(legal):
+            readiness = self.skill_learning.readiness(
+                mod.agent_skill_id(candidate_action),
+                mod.agent_skill_context(state, self.player_id, candidate_action),
+                current_turn=current_turn,
+            )
+            self.last_skill_candidates.append(
+                {
+                    "action_index": action_index,
+                    "action_type": candidate_action.type,
+                    "preferred_by_local_policy": candidate_action == baseline_action,
+                    **readiness.public_view(),
+                }
+            )
+        reflex_seed = int(
+            sha256(
+                (
+                    f"{self._match_id}:{self.player_id}:{self.decisions}:"
+                    f"{self.last_stimulus_frame.sequence_end}"
+                ).encode()
+            ).hexdigest()[:16],
+            16,
+        )
+        self.last_reflex_response = self.stimulus_pipeline.reflex_controller.respond(
+            self.last_stimulus_frame,
+            self.last_fast_appraisal,
+            turn=current_turn,
+            conscientiousness=self.profile.conscientiousness,
+            agreeableness=self.profile.agreeableness,
+            neuroticism=self.profile.neuroticism,
+            stress=self.cognition.stress,
+            rng=Random(reflex_seed),
+        )
+        self.last_deliberation_gate = self.stimulus_pipeline.deliberation_gate.evaluate(
+            provider_available=decision_client is not None,
+            frame=self.last_stimulus_frame,
+            appraisal=self.last_fast_appraisal,
+            decision_mode=self.decision_mode.value,
+            legal_action_types=(action.type for action in legal),
+            procedural_values=averages,
+            previous_action=last_action,
+            text_interaction=(
+                "text_state" in mod.capabilities
+                or "text" in mod.tags
+                or "interview" in mod.tags
+                or "debate" in mod.tags
+            ),
+            plan_revised=self.last_plan_revised,
+            skill_candidates=self.last_skill_candidates,
+        )
+        skill_context = [
+            {
+                key: value
+                for key, value in candidate.items()
+                if key
+                in {
+                    "action_index",
+                    "skill_id",
+                    "stage",
+                    "confidence",
+                    "context_attempts",
+                    "automatic",
+                }
+            }
+            for candidate in self.last_skill_candidates
+        ]
         self.last_context = ContextComposer().compose(
             match_id=self._match_id,
             agent_id=self.player_id,
@@ -409,17 +594,32 @@ class AgentBrain:
             reflections=[item.public_view() for item in self.memory_system.reflections[-4:]],
             current_plan=self._plan_context(),
             social_beliefs=self.social_belief.public_view(),
+            relationship_profiles=self._relationship_views(),
             activated_traits=self.activated_traits,
             decision_mode=self.decision_mode.value,
             narrative_dynamics=narrative_context,
             influence_affordances=influence_affordances,
             decision_tendencies=self.last_decision_tendencies,
+            implicit_control={
+                "stimulus_frame": self.last_stimulus_frame.public_view(),
+                "fast_appraisal": self.last_fast_appraisal.private_view(),
+                "involuntary_response": self.last_reflex_response.observable_view(),
+                "deliberation_gate": self.last_deliberation_gate.public_view(),
+                "procedural_skill_learning": {
+                    "candidate_actions": skill_context,
+                    "policy": self.skill_learning.public_view(
+                        current_turn=current_turn
+                    )["automaticity_policy"],
+                    "new_context_requires_guidance": True,
+                },
+                "reality_boundary": RealityStatusGuard.context_contract(),
+            },
         )
         llm_decision = None
         llm_error: dict[str, str] | None = None
         fact_proposal_result: dict[str, Any] | None = None
         influence_intent: InfluenceIntent | None = None
-        if decision_client is not None:
+        if decision_client is not None and self.last_deliberation_gate.should_deliberate:
             llm_started = perf_counter()
             try:
                 llm_decision = decision_client.choose_structured_sync(
@@ -473,8 +673,15 @@ class AgentBrain:
                     rng,
                 )
         else:
-            choice_index = bounded_choice(
-                utilities,
+            automatic_indices = self.last_deliberation_gate.automatic_action_indices
+            eligible_indices = (
+                automatic_indices
+                if decision_client is not None and automatic_indices
+                else tuple(range(len(legal)))
+            )
+            eligible_utilities = [utilities[index] for index in eligible_indices]
+            eligible_choice = bounded_choice(
+                eligible_utilities,
                 min(
                     1.0,
                     max(
@@ -485,7 +692,9 @@ class AgentBrain:
                 ),
                 rng,
             )
+            choice_index = eligible_indices[eligible_choice]
         action = legal[choice_index]
+        self.last_selected_skill = dict(self.last_skill_candidates[choice_index])
         if influence_intent is None:
             influence_intent = baseline_influence_intents[action.type]
         chosen_narrative_affordance = narrative_affordances.get(action.type, {})
@@ -513,6 +722,7 @@ class AgentBrain:
             "expression_gap": round(abs(internal_intensity - displayed_intensity), 3),
             "display_rule": self.profile.display_rule,
             "influence_presentation": influence_intent.public_presentation(),
+            "involuntary_response": self.last_reflex_response.observable_view(),
         }
         best_index = max(range(len(utilities)), key=utilities.__getitem__)
         regret = max(0.0, utilities[best_index] - utilities[choice_index])
@@ -539,6 +749,32 @@ class AgentBrain:
             f"Pursue {self.cognition.intention}; chose {action.type} from "
             f"{len(legal)} rule-valid options"
         )
+        baseline_utterance = None
+        speech_style_diagnostic: dict[str, Any] = {
+            "applied": False,
+            "source": "provider" if llm_decision is not None else "no_semantic_utterance",
+        }
+        provider_utterance = llm_decision.utterance if llm_decision is not None else None
+        if (
+            provider_utterance
+            and self.identity.speech_style.get("constraint_source") != "sampled_archetype"
+        ):
+            provider_utterance, speech_style_diagnostic = SpeechStyleRealizer().realize(
+                provider_utterance,
+                self.identity.speech_style,
+                mature_fiction=self.behavior_policy.content_mode.value == "mature_fiction",
+            )
+            speech_style_diagnostic["source"] = "provider_then_style_enforcer"
+        if llm_decision is None:
+            semantic_utterance = mod.agent_utterance(state, self.player_id, action)
+            if semantic_utterance:
+                baseline_utterance, speech_style_diagnostic = SpeechStyleRealizer().realize(
+                    semantic_utterance,
+                    self.identity.speech_style,
+                    mature_fiction=self.behavior_policy.content_mode.value
+                    == "mature_fiction",
+                )
+                speech_style_diagnostic["source"] = "engine_baseline_realizer"
         trace = {
             "policy": (
                 f"llm:{decision_client.provider.name}"
@@ -546,10 +782,24 @@ class AgentBrain:
                 else f"{mod.id}.baseline"
             ),
             "decision_source": "llm" if llm_decision is not None else "baseline",
+            "decision_path": (
+                "llm_deliberation"
+                if llm_decision is not None
+                else "provider_fallback"
+                if llm_error is not None
+                else "reflex_or_routine"
+                if decision_client is not None
+                else "local_baseline"
+            ),
             "rationale": llm_decision.reason
             if llm_decision and llm_decision.reason
             else default_rationale,
-            "utterance": llm_decision.utterance if llm_decision else None,
+            "utterance": provider_utterance if llm_decision else baseline_utterance,
+            "speech_style": {
+                "profile": self.identity.speech_style,
+                "diagnostic": speech_style_diagnostic,
+                "content_and_action_independent": True,
+            },
             "response_plan": response_plan,
             "llm": (
                 {
@@ -568,6 +818,15 @@ class AgentBrain:
                 else None
             ),
             "llm_error": llm_error,
+            "llm_skip": (
+                {
+                    **self.last_deliberation_gate.public_view(),
+                    "provider": decision_client.provider.name,
+                }
+                if decision_client is not None
+                and not self.last_deliberation_gate.should_deliberate
+                else None
+            ),
             "confidence": round(confidence, 3),
             "baseline_action": baseline_action.type,
             "memory_used": memory_used,
@@ -583,7 +842,15 @@ class AgentBrain:
             "psychological_matrix": self.cognition.psychology_view(),
             "opponent_model": self.opponent_model,
             "social_beliefs": self.social_belief.public_view(),
+            "relationship_memory": self._relationship_views(),
             "appraisal": self.last_appraisal.public_view() if self.last_appraisal else {},
+            "stimulus_frame": self.last_stimulus_frame.public_view(),
+            "fast_appraisal": self.last_fast_appraisal.public_view(),
+            "involuntary_response": self.last_reflex_response.observable_view(),
+            "deliberation_gate": self.last_deliberation_gate.public_view(),
+            "skill_learning": self.skill_learning.public_view(current_turn=current_turn),
+            "skill_candidates": self.last_skill_candidates,
+            "selected_skill": self.last_selected_skill,
             "current_plan": self._plan_context(),
             "decision_tendencies": self.last_decision_tendencies,
             "activated_traits": self.activated_traits,
@@ -610,6 +877,7 @@ class AgentBrain:
                 "autobiographical_memory": bool(self.identity.formative_memories),
                 "emotion_modeled": True,
                 "opponent_modeled": bool(self.opponent_model),
+                "relationship_specific_memory": bool(self.relationship_profiles),
                 "persistent_intention": self.cognition.intention_age > 0,
                 "bounded_rationality": self.profile.decision_noise > 0,
                 "retrieval_grounded": bool(self.retrieved_memories),
@@ -633,6 +901,14 @@ class AgentBrain:
                 "goal_directed_social_influence": bool(
                     influence_affordances.get(action.type)
                 ),
+                "multimodal_stimulus_grounding": self.last_stimulus_frame.has_input,
+                "pre_deliberative_appraisal": self.last_stimulus_frame.has_input,
+                "involuntary_expression": bool(self.last_reflex_response.cues),
+                "provider_call_gated": decision_client is not None,
+                "dynamic_skill_automaticity": True,
+                "selected_skill_automatic": bool(
+                    self.last_selected_skill.get("automatic")
+                ),
             },
             "predicted_effect": prediction["description"],
             "prediction": prediction,
@@ -643,6 +919,12 @@ class AgentBrain:
                 **influence_intent.private_view(),
                 "action_type": action.type,
                 "fact_proposals": fact_proposal_result,
+            },
+            "_private_reflex": {
+                "stimulus_frame": self.last_stimulus_frame.private_view(),
+                "fast_appraisal": self.last_fast_appraisal.private_view(),
+                "response": self.last_reflex_response.private_view(),
+                "reality_boundary": RealityStatusGuard.context_contract(),
             },
         }
         self.decisions += 1
@@ -782,6 +1064,7 @@ class AgentBrain:
         score_after: float,
         trace: dict[str, Any],
     ) -> None:
+        self._forget_expired_short_term(turn)
         expected = list(trace["prediction"]["expected_events"])
         actual = [item["type"] for item in emitted]
         surprise = 0.0 if set(expected) & set(actual) else (0.5 if not expected else 1.0)
@@ -798,6 +1081,7 @@ class AgentBrain:
                 predicted_events=expected,
                 surprise=surprise,
                 regret=float(trace.get("decision_regret_proxy", 0.0)),
+                expires_turn=turn + self.short_term_ttl_turns,
             )
         )
         emotional_intensity = max(
@@ -820,6 +1104,37 @@ class AgentBrain:
             tags=(self.plan.goal, self.cognition.intention, self.role),
         )
         self.memory_system.maybe_reflect(turn)
+        selected_skill = trace.get("selected_skill", {})
+        if isinstance(selected_skill, dict) and selected_skill.get("skill_id"):
+            score_delta = score_after - score_before
+            skill_success = surprise < 0.6 and score_delta >= -0.05
+            skill_readiness = self.skill_learning.record_execution(
+                str(selected_skill["skill_id"]),
+                dict(selected_skill.get("context", {}).get("descriptor", {})),
+                turn=turn,
+                success=skill_success,
+                surprise=surprise,
+                guided=trace.get("decision_path") == "llm_deliberation",
+                automatic=(
+                    trace.get("decision_path") == "reflex_or_routine"
+                    and bool(selected_skill.get("automatic"))
+                ),
+            )
+            self.last_skill_update = {
+                **skill_readiness.public_view(),
+                "success": skill_success,
+                "surprise": round(surprise, 3),
+                "control_source": (
+                    "guided_llm"
+                    if trace.get("decision_path") == "llm_deliberation"
+                    else "automatic_skill"
+                    if trace.get("decision_path") == "reflex_or_routine"
+                    and selected_skill.get("automatic")
+                    else "local_practice"
+                ),
+            }
+        else:
+            self.last_skill_update = {}
         assert self.narrative_dynamics is not None
         self.narrative_dynamics.record_consequence(
             action_type=action.type,
@@ -916,7 +1231,16 @@ class AgentBrain:
             "psychological_matrix": self.cognition.psychology_view(),
             "opponent_model": self.opponent_model,
             "social_beliefs": self.social_belief.public_view(),
+            "relationship_memory": self._relationship_views(),
             "appraisal": self.last_appraisal.public_view() if self.last_appraisal else None,
+            "stimulus_frame": self.last_stimulus_frame.private_view(),
+            "fast_appraisal": self.last_fast_appraisal.private_view(),
+            "involuntary_response": self.last_reflex_response.private_view(),
+            "deliberation_gate": (
+                self.last_deliberation_gate.public_view()
+                if self.last_deliberation_gate
+                else None
+            ),
             "current_plan": self._plan_context(),
             "decision_tendencies": self.last_decision_tendencies,
             "last_outcome_reappraisal": self.last_outcome_reappraisal,
@@ -931,6 +1255,15 @@ class AgentBrain:
             "memory_depth": len(self.memory),
             "recent_memory": [item.__dict__ for item in list(self.memory)[-3:]],
             "memory_architecture": self.memory_system.public_view(),
+            "skill_learning": (
+                self.skill_learning.public_view(
+                    current_turn=int(self.world_model.get("turn", self.decisions))
+                )
+                if self.skill_learning
+                else None
+            ),
+            "last_skill_candidates": self.last_skill_candidates,
+            "last_skill_update": self.last_skill_update,
             "last_retrieval": self.retrieved_memories,
             "context_policy": self.last_context.diagnostics if self.last_context else None,
             "narrative": {
@@ -952,6 +1285,11 @@ class AgentBrain:
             "decisions": self.decisions,
             "identity": self.identity.public_view(self._revealed_story_titles),
             "fact_graph": self.fact_graph.public_view(),
+            "skill_learning": (
+                self.skill_learning.public_view(current_turn=self.decisions)
+                if self.skill_learning
+                else None
+            ),
             "narrative": {
                 "revealed_beats": len(self._revealed_story_titles),
                 "total_beats": len(self.identity.formative_memories),
@@ -1080,6 +1418,22 @@ class AgentBrain:
     def _update_opponent_model(self, events: list[GameEvent]) -> None:
         counts = dict(self.opponent_model.get("action_counts", {}))
         observed = int(self.opponent_model.get("observed_actions", 0))
+        by_actor = {
+            actor_id: dict(value)
+            for actor_id, value in dict(self.opponent_model.get("by_actor", {})).items()
+        }
+        if not counts:
+            for actor_id, profile in self.relationship_profiles.items():
+                actor_counts = dict(profile.action_counts)
+                if actor_counts:
+                    by_actor[actor_id] = {
+                        "observed_actions": sum(actor_counts.values()),
+                        "action_counts": actor_counts,
+                        "dominant_action": max(actor_counts, key=actor_counts.get),
+                    }
+                for action, count in actor_counts.items():
+                    counts[action] = counts.get(action, 0) + count
+                    observed += count
         for event in events:
             if event.seq <= self._observed_event_seq:
                 continue
@@ -1087,6 +1441,22 @@ class AgentBrain:
                 action_type = str(event.payload.get("action_type", "unknown"))
                 counts[action_type] = counts.get(action_type, 0) + 1
                 observed += 1
+                actor_id = str(event.actor_id)
+                actor_model = by_actor.setdefault(
+                    actor_id, {"observed_actions": 0, "action_counts": {}}
+                )
+                actor_counts = dict(actor_model.get("action_counts", {}))
+                actor_counts[action_type] = actor_counts.get(action_type, 0) + 1
+                actor_model["action_counts"] = actor_counts
+                actor_model["observed_actions"] = int(
+                    actor_model.get("observed_actions", 0)
+                ) + 1
+                actor_model["dominant_action"] = max(
+                    actor_counts, key=actor_counts.get
+                )
+                actor_model["confidence"] = round(
+                    min(0.95, int(actor_model["observed_actions"]) / 8), 3
+                )
         self._observed_event_seq = max(
             self._observed_event_seq, max((event.seq for event in events), default=0)
         )
@@ -1096,7 +1466,191 @@ class AgentBrain:
             "action_counts": counts,
             "dominant_action": dominant,
             "confidence": round(min(0.9, observed / 8), 3),
+            "by_actor": by_actor,
         }
+
+    def _ensure_relationship_profiles(self) -> None:
+        assert self.relationship_memory is not None
+        for actor_id, participant in self.participant_directory.items():
+            if actor_id == self.player_id or actor_id in self.relationship_profiles:
+                continue
+            self.relationship_profiles[actor_id] = self.relationship_memory.load_or_create(
+                participant["memory_key"],
+                participant["display_name"],
+                participant["kind"],
+            )
+
+    def _sync_social_belief(
+        self, profile: RelationshipProfile, *, preserve_intent: bool = False
+    ) -> None:
+        self.social_belief.trust = profile.trust
+        self.social_belief.respect = profile.respect
+        self.social_belief.familiarity = profile.familiarity
+        self.social_belief.perceived_hostility = profile.hostility
+        self.social_belief.confidence = min(0.98, profile.familiarity * 0.9)
+        if preserve_intent and profile.interaction_count == 0:
+            return
+        self.social_belief.predicted_intent = {
+            "hostile": "escalate",
+            "guarded": "test_boundaries",
+            "warm": "cooperate",
+            "cautiously_positive": "cooperate_or_probe",
+        }.get(profile.attitude, "cooperate_or_probe")
+
+    def _relationship_event_content(
+        self, event: GameEvent, profile: RelationshipProfile
+    ) -> tuple[str, tuple[str, ...], float]:
+        payload = event.payload
+        if event.type == "interview_question":
+            theme = str(payload.get("theme", "unknown"))[:80]
+            prompt = " ".join(str(payload.get("prompt", "")).split())[:280]
+            severity = max(0.0, min(1.0, float(payload.get("severity", 0.0))))
+            return (
+                f"{profile.target_label} asked a {theme} question with severity "
+                f"{severity:.2f}: {prompt}",
+                (theme, "question_style"),
+                severity,
+            )
+        if event.type == "interview_response":
+            theme = str(payload.get("theme", "unknown"))[:80]
+            strategy = str(payload.get("strategy", "respond"))[:80]
+            intensity = max(0.0, min(1.0, float(payload.get("intensity", 0.5))))
+            return (
+                f"{profile.target_label} responded to {theme} with {strategy} at "
+                f"intensity {intensity:.2f}.",
+                (theme, strategy, "observed_reaction"),
+                intensity,
+            )
+        if event.type == "story_reveal":
+            beat = payload.get("beat", {})
+            title = str(beat.get("title", "background")) if isinstance(beat, dict) else "background"
+            return (
+                f"{profile.target_label} publicly disclosed autobiographical background: {title}.",
+                (title[:100], "reported_background"),
+                0.75,
+            )
+        action = str(payload.get("action_type", "unknown"))[:80]
+        return (
+            f"Observed {profile.target_label} use {action} in the current interaction.",
+            (action, "observed_behavior"),
+            0.35,
+        )
+
+    @staticmethod
+    def _event_memory_cues(events: list[GameEvent]) -> list[str]:
+        cues: list[str] = []
+        for event in events[-6:]:
+            for key in (
+                "theme",
+                "prompt",
+                "action_type",
+                "strategy",
+                "move",
+                "headline",
+                "title",
+                "summary",
+                "category",
+                "policy_id",
+                "incident_id",
+            ):
+                value = event.payload.get(key)
+                if value is not None:
+                    cue = " ".join(str(value).split())[:240]
+                    if cue and cue not in cues:
+                        cues.append(cue)
+        return cues[-10:]
+
+    def _remember_relationship_events(
+        self,
+        events: list[GameEvent],
+        *,
+        current_turn: int,
+        cooperative: bool,
+    ) -> None:
+        significant = {
+            "action_applied",
+            "interview_question",
+            "interview_response",
+            "story_reveal",
+        }
+        dirty: set[str] = set()
+        for event in events:
+            if event.type not in significant or event.actor_id not in self.relationship_profiles:
+                continue
+            actor_id = str(event.actor_id)
+            profile = self.relationship_profiles[actor_id]
+            content, event_tags, intensity = self._relationship_event_content(event, profile)
+            memory = self.memory_system.record(
+                turn=current_turn,
+                content=content,
+                action="",
+                outcome_events=[event.type],
+                score_delta=-0.2 * intensity if not cooperative else 0.1 * (1 - intensity),
+                surprise=max(self.cognition.surprise, 0.25 * intensity),
+                emotional_intensity=max(
+                    intensity,
+                    self.cognition.stress,
+                    self.cognition.anger,
+                    self.cognition.fear,
+                ),
+                tags=("relationship", profile.target_label, *event_tags),
+                extra_categories=("relationship", "person_model"),
+                force_long_term=True,
+                track_procedural=False,
+                metadata={
+                    "source": "observed_interaction",
+                    "target_token": profile.target_token,
+                    "source_event_seq": event.seq,
+                    "epistemic_status": "observed",
+                },
+            )
+            profile.observe(
+                event,
+                evidence_memory_id=memory.id,
+                cooperative=cooperative,
+            )
+            dirty.add(actor_id)
+        assert self.relationship_memory is not None
+        for actor_id in dirty:
+            self.relationship_memory.persist(self.relationship_profiles[actor_id])
+
+    def _relationship_views(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "actor_id": actor_id,
+                **profile.private_view(),
+            }
+            for actor_id, profile in self.relationship_profiles.items()
+        ]
+
+    def _relationship_fact_summaries(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "target_actor_id": actor_id,
+                "target_label": profile.target_label,
+                "attitude": profile.attitude,
+                "trust": round(profile.trust, 3),
+                "hostility": round(profile.hostility, 3),
+                "impressions": [
+                    {
+                        "statement": item.statement[:180],
+                        "confidence": round(item.confidence, 3),
+                        "epistemic_status": item.epistemic_status,
+                    }
+                    for item in list(profile.impressions.values())[-3:]
+                ],
+                "sensitive_topics": [
+                    {
+                        "topic": item.topic,
+                        "kind": item.kind,
+                        "confidence": round(item.confidence, 3),
+                    }
+                    for item in list(profile.sensitive_points.values())[-3:]
+                ],
+                "warning": "revisable belief, not canonical target fact",
+            }
+            for actor_id, profile in self.relationship_profiles.items()
+        ]
 
     def _update_intention(self, cooperative: bool) -> None:
         previous = self.cognition.intention
@@ -1183,6 +1737,64 @@ class AgentBrain:
 
     def _prediction(self, mod: GameMod, action: Action) -> dict[str, Any]:
         expectations = {
+            ("agent_town", "move_to"): (
+                "reach a chosen place while spending some energy",
+                ["town_moved"],
+            ),
+            ("agent_town", "work"): (
+                "advance work experience and town progress",
+                ["town_worked"],
+            ),
+            ("agent_town", "socialize"): (
+                "change a specific relationship through conversation",
+                ["town_conversation"],
+            ),
+            ("agent_town", "rest"): ("recover energy", ["town_rested"]),
+            ("agent_town", "explore"): (
+                "discover a small environmental detail",
+                ["town_explored"],
+            ),
+            ("agent_town", "wait"): ("observe the immediate area", ["town_waited"]),
+            ("agent_town", "respond_incident"): (
+                "reduce an observed incident through direct effort",
+                ["town_incident_response"],
+            ),
+            ("agent_town", "seek_shelter"): (
+                "move away from a known environmental threat",
+                ["town_sheltered"],
+            ),
+            ("agent_town", "check_bulletin"): (
+                "update knowledge from discoverable public records",
+                ["town_news_checked"],
+            ),
+            ("agent_town", "support_neighbor"): (
+                "help a nearby resident regulate distress",
+                ["town_neighbor_supported"],
+            ),
+            ("agent_town", "check_phone"): (
+                "observe a ranked social feed without treating posts as facts",
+                ["town_social_feed_checked"],
+            ),
+            ("agent_town", "publish_post"): (
+                "publish a sourced report to a configured social platform",
+                ["town_social_posted"],
+            ),
+            ("agent_town", "reshare_post"): (
+                "relay a post while preserving its provenance chain",
+                ["town_social_reshared"],
+            ),
+            ("agent_town", "comment_post"): (
+                "discuss or question a public post",
+                ["town_social_commented"],
+            ),
+            ("agent_town", "verify_claim"): (
+                "compare a social claim with canonical evidence",
+                ["town_claim_verified"],
+            ),
+            ("agent_town", "investigate_claim"): (
+                "acquire new observed evidence before judging a social claim",
+                ["town_claim_investigated"],
+            ),
             ("tactical_duel", "attack"): ("reduce opponent capacity", ["unit_attacked"]),
             ("tactical_duel", "move"): ("improve tactical position", ["unit_moved"]),
             ("tactical_duel", "charge"): ("increase available energy", ["unit_charged"]),

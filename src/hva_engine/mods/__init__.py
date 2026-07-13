@@ -3,6 +3,7 @@ from .debate import DebateArena
 from .interview import AdversarialInterview
 from .racing import RacingStrategy
 from .tactical import TacticalDuel
+from .town import AgentTown
 
 __all__ = [
     "AdversarialInterview",
@@ -10,4 +11,5 @@ __all__ = [
     "DebateArena",
     "RacingStrategy",
     "TacticalDuel",
+    "AgentTown",
 ]

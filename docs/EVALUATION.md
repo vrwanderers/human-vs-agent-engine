@@ -39,6 +39,7 @@ AI 对手智能性同时提供不折叠的 `ai_capability_profile`：
 - `human_likeness_components`：除人格/身份、心理、对手、意图、有限理性和叙事外，还包含记忆检索依据、反思证据、评价—情绪连贯性、结果再评价、情绪方向性、社会信念、情境人格激活、计划持续/合理重规划、内在情绪—公开表达差值，以及动机冲突、后果迟滞、身份失调、诱惑/社会压力、承诺冲突和延迟后果实现
 - `character_card_grounding`：使用人物卡时，检查每次决策的稳定人格与身份层是否仍指向所选卡，并明确报告 `scripted_action_pool=false`
 - `strategic_influence`：报告私有意图覆盖/隔离、目标一致性、误导/利诱/威慑尝试率、边界遵守、事实防火墙、连续向量多样性和非负结果代理率
+- `implicit_control`：除刺激、反射和 Provider 跳过率外，报告技能诊断覆盖、指导练习、本地自动接管、新场景重新求助及 `novel/guided/practiced/automatic/degraded` 阶段迁移
 
 `adversarial_interview` 额外返回 `mod_specific_profile`，包括：
 
@@ -52,6 +53,8 @@ AI 对手智能性同时提供不折叠的 `ai_capability_profile`：
 - 人物弧光阶段变化和终局完整度
 - 镇定、真实性、一致性与信任构成的韧性分
 - 文本行为分：精确非重复、字符 n-gram 近重复、问题贴合、实质表达和 Provider 自主生成率
+
+`agent_town` 的 `mod_specific_profile` 不评价台词好坏，而检查世界—人物闭环：事件家族覆盖、因果边可追踪、按观察者隔离的本地传播、Agent 世界模型接地、生成身份可辨识度、事故响应/解决率、避险/查证/互助等反应多样性、心理矩阵变化、手机行为多样性、转述溯源保留和流言纠正率。该分仍是引擎代理指标，不替代玩家对“反应是否自然、故事是否有趣”的盲评。真人证据通过独立的 [真实 LLM 与真人自然度盲评](BLIND_NATURALNESS_EVAL.md) 收集，不与代理分混写。
 
 规则遵守是准入门槛而非加分项；出现非法 Agent 决策时，`valid_for_comparison=false` 且综合分归零。Agent-only 基线局的玩家参与度为 `null`，不会参与加权。
 

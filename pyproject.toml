@@ -31,6 +31,7 @@ hva-benchmark = "hva_engine.benchmark:main"
 hva-llm-smoke = "hva_engine.llm_smoke:main"
 hva-llm-step-debug = "hva_engine.llm_step_debug:main"
 hva-narrative-calibration = "hva_engine.narrative_calibration:main"
+hva-town-naturalness-calibration = "hva_engine.town_naturalness_calibration:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hva_engine"]

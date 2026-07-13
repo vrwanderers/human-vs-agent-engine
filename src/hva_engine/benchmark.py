@@ -57,7 +57,10 @@ def run_benchmark(
         evaluation = engine.evaluation(view.id)
         evaluations.append(evaluation)
         if "coop" in selected_mode.value:
-            outcomes.append("success" if view.state.get("success") is True else "failure")
+            if "success" not in view.state:
+                outcomes.append("completed")
+            else:
+                outcomes.append("success" if view.state.get("success") is True else "failure")
             continue
         if not engine.mods[mod_id].competitive_balance_applicable:
             outcomes.append("completed")
@@ -103,11 +106,16 @@ def run_benchmark(
             "draw_rate": round(draw_rate, 3),
             "repeated_draw_penalty": round(1 - min(1.0, max(0.0, draw_rate - 0.35) / 0.65), 3),
         }
-    elif "coop" in selected_mode.value:
+    elif "coop" in selected_mode.value and "completed" not in outcome_counts:
         success_rate = outcome_counts["success"] / len(evaluations)
         balance = {
             "success_rate": round(success_rate, 3),
             "target_success_balance": round(1 - min(1.0, abs(success_rate - 0.65) / 0.65), 3),
+        }
+    elif "coop" in selected_mode.value:
+        balance = {
+            "applicable": False,
+            "reason": "sandbox_has_no_binary_success_outcome",
         }
     else:
         balance = {

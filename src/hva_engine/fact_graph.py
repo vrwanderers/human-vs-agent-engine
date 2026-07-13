@@ -56,7 +56,11 @@ class FactNode:
 class AgentFactGraph:
     """Versioned identity truth with constrained space for in-character improvisation."""
 
-    RESERVED_PREFIXES = ("identity.", "history.formative_memory.")
+    RESERVED_PREFIXES = (
+        "identity.",
+        "history.formative_memory.",
+        "history.lived_memory.",
+    )
     ALLOWED_DYNAMIC_PREDICATES = {
         "state.current_intention",
         "state.psychological_matrix",
@@ -78,6 +82,7 @@ class AgentFactGraph:
         self._sequence = 0
         self._rejections: list[dict[str, Any]] = []
         self.formative_memory_fact_ids: dict[str, str] = {}
+        self.lived_memory_fact_ids: dict[str, str] = {}
 
     @classmethod
     def from_identity(
@@ -98,6 +103,9 @@ class AgentFactGraph:
         for memory in identity.formative_memories:
             fact = graph._add_core(f"history.formative_memory.{memory.title}", memory.public_view())
             graph.formative_memory_fact_ids[memory.title] = fact.id
+        for memory in identity.lived_memories:
+            fact = graph._add_core(f"history.lived_memory.{memory.title}", memory.public_view())
+            graph.lived_memory_fact_ids[memory.title] = fact.id
         return graph
 
     def _add_core(

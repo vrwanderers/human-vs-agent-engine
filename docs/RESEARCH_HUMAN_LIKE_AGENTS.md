@@ -30,6 +30,10 @@
 | [CharacterBox](https://aclanthology.org/2025.naacl-long.323/) | 动态环境和多 Agent 互动要持续更新人物状态 | `NarrativeDynamics` 接收事件评价与行动后果，产生跨回合迟滞 | 后果迟滞、人物弧光变化 |
 | [CHATTER](https://aclanthology.org/2025.wnu-1.11/) | 影视角色属性应由人工验证，并与纯语言表面区分 | 人格、动机、情绪评价和选择分别评分；后续接入许可标注 | 属性标注一致性仍待独立复核 |
 | [OpenToM](https://aclanthology.org/2024.acl-long.466/) | 自然叙事中的行动需要动机与心理状态共同解释 | 校准案例同时记录利害、控制感、他人责任和情绪锚点 | 评价—情绪拟合与选择解释 |
+| [A Robust Layered Control System](https://doi.org/10.1109/JRA.1986.1087032) | 低层反应可以独立、持续运行，高层目标不必控制每一步 | 多模态快速评价与反射控制先运行，LLM 只处理升级事件 | 反射先于决策、Provider 调用率、规则遵守 |
+| [Behavior Trees in Robotics and AI](https://arxiv.org/abs/1709.00084) | 模块化、可中断的反应任务适合连接计划和连续执行 | `DeliberationGate` 与程序动作接口；后续接入 Godot 技能树 | 已知技能覆盖、重规划率、执行成功率 |
+| [SayCan](https://arxiv.org/abs/2204.01691) | 语言模型负责高层语义，落地技能和可供性约束实际执行 | LLM 只从合法宏观动作中选择，反射/习惯层执行低层行为 | Provider 跳过率、合法率、任务完成率 |
+| [Spontaneous Micro-expression Analysis](https://arxiv.org/abs/1511.00423) | 非自主表情短暂、低强度且难以可靠解读 | 身体线索与有意识表达分离，并强制保留多义解释 | 线索重复率、强度校准、真人盲评 |
 
 补充研究方向包括动态第一人称社会推理的
 [EgoSocialArena](https://arxiv.org/abs/2410.06195)、情绪轨迹与情绪记忆的

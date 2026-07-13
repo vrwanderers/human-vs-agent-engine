@@ -21,6 +21,35 @@ def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _derived_speech_style(card: CharacterCardSpec) -> dict[str, Any]:
+    text = f"{card.background} {card.social_style}".lower()
+    if any(token in text for token in ("scholar", "academic", "学者", "教授")):
+        register = "academic"
+    elif any(token in text for token in ("philosoph", "哲学", "思辨")):
+        register = "philosophical"
+    elif any(token in text for token in ("engineer", "technical", "hacker", "技术", "工程")):
+        register = "technical"
+    elif any(token in text for token in ("plain", "earthy", "朴实", "直爽")):
+        register = "plain"
+    else:
+        register = "neutral"
+    return {
+        "voice_register": register,
+        "education_voice": "derived_from_character_background",
+        "vocabulary_complexity": 0.72 if register in {"academic", "philosophical"} else 0.5,
+        "sentence_complexity": 0.7 if register in {"academic", "philosophical"} else 0.5,
+        "directness": 0.55,
+        "roughness": 0.12,
+        "warmth": 0.5,
+        "humor": 0.2,
+        "philosophical_abstraction": 0.78 if register == "philosophical" else 0.2,
+        "technical_jargon": 0.78 if register == "technical" else 0.1,
+        "verbosity": 0.5,
+        "verbal_habits": [],
+        "constraint_source": "character_card_derived",
+    }
+
+
 class CharacterCardRegistry:
     """Resolves identity seeds; cards never contain situation-to-action mappings."""
 
@@ -62,6 +91,11 @@ class CharacterCardRegistry:
                 "aspiration": card.aspiration,
                 "values": card.values,
                 "social_style": card.social_style,
+                "speech_style": (
+                    card.speech_style.model_dump()
+                    if card.speech_style is not None
+                    else _derived_speech_style(card)
+                ),
                 "decision_model": "runtime_cognition_not_scripted_actions",
             }
             for card in self.cards.values()
@@ -112,8 +146,33 @@ class CharacterCardRegistry:
                     recollection=memory.recollection,
                     emotional_valence=memory.emotional_valence,
                     lesson=memory.lesson,
+                    people=tuple(memory.people),
+                    themes=tuple(memory.themes),
+                    place=memory.place,
+                    time_period=memory.time_period,
                 )
                 for memory in card.formative_memories
+            ),
+            lived_memories=tuple(
+                AutobiographicalMemory(
+                    title=memory.title,
+                    recollection=memory.recollection,
+                    emotional_valence=memory.emotional_valence,
+                    lesson=memory.lesson,
+                    people=tuple(memory.people),
+                    themes=tuple(memory.themes),
+                    place=memory.place,
+                    time_period=memory.time_period,
+                )
+                for memory in card.lived_memories
+            ),
+            speech_style=(
+                {
+                    **card.speech_style.model_dump(),
+                    "constraint_source": "character_card_explicit",
+                }
+                if card.speech_style is not None
+                else _derived_speech_style(card)
             ),
             motive_weights=dict(card.motive_weights),
             commitment_weights=dict(card.commitment_weights),

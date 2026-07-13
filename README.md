@@ -6,25 +6,35 @@
 
 - 通用回合制状态机、MOD 注册表和可替换 Agent 策略
 - 6 维在线评价：玩家参与度、引擎通用性、动态性、虚拟玩家评价、AI 对手智能性、AI 人类感
-- 5 个 MVP MOD：`tactical_duel`、`racing_strategy`、`debate_arena`、`crisis_coop`、`adversarial_interview`
-- 论文驱动的 Agent 认知循环：四类记忆、证据反思、情绪评价/再评价、情境人格激活、社会信念、持续计划、快慢有限理性与结果复盘
+- 6 个 MVP MOD：`agent_town`、`tactical_duel`、`racing_strategy`、`debate_arena`、`crisis_coop`、`adversarial_interview`
+- 论文驱动的 Agent 认知循环：TTL 短期记忆、摘要/分类/倒排索引长期记忆、证据反思、情绪评价/再评价、情境人格激活、社会信念、持续计划、快慢有限理性与结果复盘
 - 连续决策倾向：每个合法动作得到可审计的吸引力、排名和主要动因；它只是动机压力，不是写死的候选答案，角色可在记忆、承诺或关系风险支持下作出有限理性的非最优选择
 - 行动后心理再评价：规则结果会立即回写压力、恐惧、愤怒、士气与不确定性，形成“受压—应对—部分恢复—再次受压”的轨迹
 - 慢变量人物动力学：竞争动机、关系承诺、秘密压力、身份失调、诱惑、社会施压、自我合理化与行动后果会跨回合改变偏好并推动人物弧光
 - 连续困境与延迟代价：MOD 可为合法动作声明价值、关系、承诺、即时收益与延迟风险；选择会形成可修复但不会自动清零的债务，后续回合再结算后果
 - 独立人物参考校准：用 38 个文学、戏剧、电影/剧本元数据和机构传记关键抉择案例检验通用机制；其中 11 个中文文学案例、4 个中文近现代小说案例，均不进入运行时动作池
 - 声明式人物卡：可选择 5 张内置人物卡或提交玩家原创卡；卡片只提供身份、经历、人格、动机和承诺，不含固定动作、台词或问题—回答映射
+- 可检索自传生活回忆：人物卡可注入家庭、子女、伴侣、地点和日常故事，作为私有正史写入事实图谱与长期索引，只有相关话题才召回
+- 按对象的关系记忆：分别保存对每位玩家/Agent 的信任、态度、行为印象、公开背景和敏感主题，观察、推测与事实严格分层
+- 人物语言风格层：朴实、口语、学术、哲学、技术、居高临下或粗粝等表达由连续参数约束，不改变动作选择，也不是固定台词池
 - 渐进式角色故事揭露：关键回合、压力、受挫、信任和终局会产生 `story_reveal` 事件
 - 连续混合应对：采访中的七类策略是内部行为坐标，每次回答混合 2–4 类策略及情绪强度，而不是传统 NPC 的固定单选招式
 - 目标驱动的连续战略影响：Agent 可按目标、人格、压力、关系与场景机会组合选择性披露、误导、利诱和游戏内威慑；这些不是固定招式池
 - 战略意图隔离：真实度、目标信念和识破风险仅写入所属 Agent 的引擎私有事件，玩家和其他 Agent 只能观察公开言行
 - 受约束的事实图谱：核心身世不可覆盖，自由发挥必须引用事实依据，可变事实保留修订链
 - 可选 Neo4j 持久化，存储 Agent、事实、揭露状态和 `SUPERSEDES` 关系
+- 可选 SQLite 长期记忆库；记忆正文、摘要、分类、标签和词项使用规范化表及索引，不写成单个历史 JSON
 - Agent 私有上下文隔离、分层提示、关键层优先的结构化压缩与协作共享黑板；被压缩的低优先级段仍保持合法 JSON 并可审计
 - OpenAI-compatible LLM Provider 接口，可快速切换云端或本地模型
+- 多模态刺激、身体反射、可成长/退化的场景化程序技能，以及必要时才调用 LLM 的审慎门控；陌生路线或新工作先规划，稳定练习后才允许本地自动接管
 - 人类 vs Agent、Agent vs Agent、Agent 协作、人类-Agent 协作四种模式
 - FastAPI 控制后端与浏览器调试面板
 - Godot 4 展示客户端
+- `Agent 小镇`权威世界模型：时间、天气、灾害、意外、新闻、公告、镇长讲话和政策按传播范围进入各 Agent 的独立观察；Agent 可救灾、避险、查公告和照顾邻居
+- 因果事件导演器：世界风险、Agent 维护/救灾/求证行为、前序事件和冷却共同决定后续事件，不再使用固定回归日程
+- MOD 通用社交媒体兼容层：微博式微帖、短视频、关系/信任排序、转述溯源、私有信念、主动调查与显式事实核查
+- 可选 SQLite 世界快照：绝对时间、因果图、政策、事故和社交历史可跨对局恢复，不混入 Agent 私有上下文
+- 基线 vs 真实 LLM 的无回退配对实验、A/B 条件盲化、真人 1–7 分采集和持久化汇总
 - 直播弹幕命令入口与可扩展平台适配协议
 - 自动化测试与 Docker 开发环境
 
@@ -40,6 +50,8 @@ uvicorn hva_engine.api:app --reload
 ```
 
 打开 <http://127.0.0.1:8000> 使用调试控制台，或用 Godot 4 打开 `godot/project.godot`。
+
+Godot 默认打开 2D 俯视角 `Agent 小镇`：一名真人观察者与三名独立 AgentBrain 共同生活三天。每个镇民会从稳定 memory owner 生成私有职业背景、人格、自传和家庭回忆；世界导演持续发布天气、新闻、政策与突发事件。点击“等待 30 分钟”可以单步观察 Agent 的日常和危机反应，“自动观察”会连续推进。地图和角色使用 Godot 原生像素绘制，规则坐标与画面坐标一致。详见 [Agent 小镇](docs/AGENT_TOWN.md)。
 
 也可以使用 Docker：
 
@@ -90,6 +102,29 @@ curl -X POST http://127.0.0.1:8000/api/matches \
   -H 'content-type: application/json' \
   -d '{"mod_id":"adversarial_interview","seed":19,"agent_characters":[{"card_id":"ah_q"}]}'
 ```
+
+跨对局延续同一角色的私有记忆时，为人物选择提供稳定的 `memory_owner_id`，并启用 SQLite。未提供该字段时使用对局内 Agent ID，不会意外串联不同对局：
+
+```bash
+export HVA_MEMORY_STORE=sqlite
+export HVA_MEMORY_SQLITE_PATH=data/memory/hva-memory.sqlite3
+
+curl -X POST http://127.0.0.1:8000/api/matches \
+  -H 'content-type: application/json' \
+  -d '{"mod_id":"adversarial_interview","seed":19,"agent_characters":[{"card_id":"ah_q","memory_owner_id":"ah-q-campaign-01"}]}'
+```
+
+记忆的生命周期、索引和隔离契约见 [长期与短期记忆](docs/MEMORY.md)。
+
+小镇可直接为三个 Agent 指定跨局稳定 owner，不必绑定文学人物卡。相同 owner 会重新生成同一套人物先验，并在启用 SQLite 后延续该人物的长期经历；不同 owner 的记忆、关系和熟练技能互不读取：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/matches \
+  -H 'content-type: application/json' \
+  -d '{"mod_id":"agent_town","seed":23,"agent_memory_owner_ids":["willow-astra","willow-nova","willow-mira"]}'
+```
+
+因果世界存档、社交媒体兼容层和真人盲评流程分别见 [因果世界与持久化](docs/WORLD_PERSISTENCE.md)、[社交媒体兼容层](docs/SOCIAL_MEDIA.md) 与 [真实 LLM 自然度盲评](docs/BLIND_NATURALNESS_EVAL.md)。
 
 人物卡只作为稳定身份先验，实时动作仍由世界状态、私有记忆、心理矩阵、社会信念、人物动力和 MOD 合法动作共同推演。自定义人物卡使用同一 `CharacterCardSpec`，未知字段和 `action_rules` 会被拒绝。
 
@@ -171,7 +206,7 @@ python -m hva_engine.narrative_calibration
 4. **直播输入也是动作源**：弹幕与 Godot、Web 控制台共享同一校验链路。
 5. **用 MVP 数据升级架构**：评价低分对应明确的下一轮改造方向。
 
-详细内容见 [MVP-10 窦娥单步 LLM 测试](docs/MVP10_DOU_E_LLM_TEST.md)、[战略影响机制](docs/STRATEGIC_INFLUENCE.md)、[人物卡](docs/CHARACTER_CARDS.md)、[研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[叙事人物决策校准](docs/NARRATIVE_CHARACTER_CALIBRATION.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
+详细内容见 [MVP-10 窦娥单步 LLM 测试](docs/MVP10_DOU_E_LLM_TEST.md)、[战略影响机制](docs/STRATEGIC_INFLUENCE.md)、[多模态刺激、反射与审慎门控](docs/IMPLICIT_CONTROL.md)、[人物卡](docs/CHARACTER_CARDS.md)、[研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[叙事人物决策校准](docs/NARRATIVE_CHARACTER_CALIBRATION.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
 
 ## 弹幕命令
 
