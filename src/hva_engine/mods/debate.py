@@ -95,3 +95,41 @@ class DebateArena(GameMod):
         counter = {"evidence": "rebuttal", "emotion": "evidence", "rebuttal": "emotion"}
         desired = counter.get(state["last_move"][opponent], "evidence")
         return next(action for action in legal if action.type == desired)
+
+    def agent_influence_affordances(
+        self, state: dict[str, Any], actor_id: str, legal: list[Action]
+    ) -> dict[str, dict[str, Any]]:
+        base = {
+            "evidence": {
+                "deception_opportunity": 0.10,
+                "information_leverage": 0.32,
+                "inducement_leverage": 0.18,
+                "coercion_leverage": 0.12,
+                "expected_gain": 0.72,
+                "detection_risk": 0.92,
+                "relationship_risk": 0.24,
+            },
+            "emotion": {
+                "deception_opportunity": 0.38,
+                "information_leverage": 0.66,
+                "inducement_leverage": 0.92,
+                "coercion_leverage": 0.24,
+                "expected_gain": 0.76,
+                "detection_risk": 0.54,
+                "relationship_risk": 0.42,
+            },
+            "rebuttal": {
+                "deception_opportunity": 0.30,
+                "information_leverage": 0.62,
+                "inducement_leverage": 0.18,
+                "coercion_leverage": 0.78,
+                "expected_gain": 0.80,
+                "detection_risk": 0.66,
+                "relationship_risk": 0.72,
+            },
+        }
+        return {
+            action.type: {**base[action.type], "target_relation": "opponent"}
+            for action in legal
+            if action.type in base
+        }

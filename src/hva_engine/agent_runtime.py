@@ -29,6 +29,12 @@ from hva_engine.human_cognition import (
 from hva_engine.llm import LLMDecisionClient
 from hva_engine.models import Action, GameEvent
 from hva_engine.mods.base import GameMod
+from hva_engine.social_influence import (
+    InfluenceIntent,
+    constrain_model_intent,
+    derive_influence_intent,
+    strategic_utility_bias,
+)
 
 
 @dataclass
@@ -322,6 +328,21 @@ class AgentBrain:
         narrative_affordances = mod.agent_narrative_affordances(
             state, self.player_id, legal
         )
+        influence_affordances = mod.agent_influence_affordances(
+            state, self.player_id, legal
+        )
+        baseline_influence_intents = {
+            action.type: derive_influence_intent(
+                action_type=action.type,
+                goal=self.cognition.intention,
+                affordance=influence_affordances.get(action.type, {}),
+                profile=self.profile,
+                cognition=self.cognition,
+                policy=self.behavior_policy,
+                plan_age=self.plan.age,
+            )
+            for action in legal
+        }
         narrative_context = {
             **self.narrative_dynamics.public_view(),
             "legal_action_affordances": narrative_affordances,
@@ -349,6 +370,7 @@ class AgentBrain:
             activated_traits=self.activated_traits,
             decision_mode=self.decision_mode.value,
             narrative_dynamics=narrative_context,
+            influence_affordances=influence_affordances,
         )
         baseline_action = mod.agent_action(state, self.player_id, legal, rng)
         learned: dict[str, list[float]] = {}
@@ -360,6 +382,19 @@ class AgentBrain:
         narrative_biases = self.narrative_dynamics.action_biases(
             legal, narrative_affordances
         )
+        influence_biases = {
+            action.type: strategic_utility_bias(
+                baseline_influence_intents[action.type],
+                self.profile,
+                cooperative="coop" in self.role,
+            )
+            for action in legal
+        }
+        combined_state_biases = {
+            action.type: narrative_biases.get(action.type, 0.0)
+            + influence_biases.get(action.type, 0.0)
+            for action in legal
+        }
         utilities, components = action_utilities(
             legal=legal,
             baseline=baseline_action,
@@ -368,13 +403,14 @@ class AgentBrain:
             profile=self.profile,
             cognition=self.cognition,
             policy=self.behavior_policy,
-            character_state_biases=narrative_biases,
+            character_state_biases=combined_state_biases,
             cooperative="coop" in self.role,
             rng=rng,
         )
         llm_decision = None
         llm_error: dict[str, str] | None = None
         fact_proposal_result: dict[str, Any] | None = None
+        influence_intent: InfluenceIntent | None = None
         if decision_client is not None:
             try:
                 llm_decision = decision_client.choose_structured_sync(
@@ -382,11 +418,26 @@ class AgentBrain:
                     [action.model_dump() for action in legal],
                 )
                 choice_index = llm_decision.action_index
-                fact_proposal_result = self.apply_fact_proposals(llm_decision.fact_proposals)
+                selected_type = legal[choice_index].type
+                influence_intent = constrain_model_intent(
+                    llm_decision.influence_intent,
+                    fallback=baseline_influence_intents[selected_type],
+                    affordance=influence_affordances.get(selected_type, {}),
+                    policy=self.behavior_policy,
+                )
+                if influence_intent.fact_firewall_required:
+                    fact_proposal_result = self._reject_deceptive_fact_proposals(
+                        llm_decision.fact_proposals
+                    )
+                else:
+                    fact_proposal_result = self.apply_fact_proposals(
+                        llm_decision.fact_proposals
+                    )
             except Exception as exc:
                 if not llm_fallback:
                     raise
                 llm_error = {"type": type(exc).__name__, "message": str(exc)[:500]}
+                llm_decision = None
                 choice_index = bounded_choice(
                     utilities,
                     min(
@@ -417,6 +468,8 @@ class AgentBrain:
                 rng,
             )
         action = legal[choice_index]
+        if influence_intent is None:
+            influence_intent = baseline_influence_intents[action.type]
         chosen_narrative_affordance = narrative_affordances.get(action.type, {})
         response_plan = (
             llm_decision.response_plan
@@ -441,6 +494,7 @@ class AgentBrain:
             "displayed_emotion_intensity": round(displayed_intensity, 3),
             "expression_gap": round(abs(internal_intensity - displayed_intensity), 3),
             "display_rule": self.profile.display_rule,
+            "influence_presentation": influence_intent.public_presentation(),
         }
         best_index = max(range(len(utilities)), key=utilities.__getitem__)
         regret = max(0.0, utilities[best_index] - utilities[choice_index])
@@ -484,7 +538,9 @@ class AgentBrain:
                     "provider": decision_client.provider.name,
                     "model": llm_decision.response.model,
                     "usage": llm_decision.response.usage,
-                    "fact_proposals": fact_proposal_result,
+                    "fact_proposals": self._public_fact_proposal_result(
+                        fact_proposal_result, influence_intent
+                    ),
                 }
                 if llm_decision is not None and decision_client is not None
                 else None
@@ -511,6 +567,9 @@ class AgentBrain:
             "decision_mode": self.decision_mode.value,
             "narrative_dynamics": self.narrative_dynamics.public_view(),
             "narrative_action_bias": round(narrative_biases.get(action.type, 0.0), 3),
+            "strategic_influence_action_bias": round(
+                influence_biases.get(action.type, 0.0), 3
+            ),
             "narrative_action_affordance": chosen_narrative_affordance,
             "intention": self.cognition.intention,
             "behavior_policy": self.behavior_policy.public_view(),
@@ -548,12 +607,20 @@ class AgentBrain:
                     self.narrative_dynamics.commitment_debt,
                 )
                 > 0.02,
+                "goal_directed_social_influence": bool(
+                    influence_affordances.get(action.type)
+                ),
             },
             "predicted_effect": prediction["description"],
             "prediction": prediction,
             "decision_regret_proxy": round(regret, 3),
             "prompt_layers": self.last_context.layers,
             "context_policy": self.last_context.diagnostics,
+            "_private_influence_intent": {
+                **influence_intent.private_view(),
+                "action_type": action.type,
+                "fact_proposals": fact_proposal_result,
+            },
         }
         self.decisions += 1
         return action, trace
@@ -584,6 +651,38 @@ class AgentBrain:
                     }
                 )
         return {"submitted": len(proposals), "accepted": accepted, "rejected": rejected}
+
+    def _reject_deceptive_fact_proposals(
+        self, proposals: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        return {
+            "submitted": len(proposals),
+            "accepted": [],
+            "rejected": [
+                {
+                    "predicate": str(proposal.get("predicate", "unknown")),
+                    "reason": (
+                        "A strategically deceptive turn cannot mutate the canonical fact graph"
+                    ),
+                }
+                for proposal in proposals
+            ],
+            "firewall": "deceptive_turn",
+        }
+
+    def _public_fact_proposal_result(
+        self,
+        result: dict[str, Any] | None,
+        influence_intent: InfluenceIntent,
+    ) -> dict[str, Any] | None:
+        if result is None or not influence_intent.fact_firewall_required:
+            return result
+        return {
+            "submitted": result.get("submitted", 0),
+            "accepted": [],
+            "rejected_count": len(result.get("rejected", [])),
+            "status": "canonical_write_not_permitted",
+        }
 
     def _baseline_response_plan(
         self,

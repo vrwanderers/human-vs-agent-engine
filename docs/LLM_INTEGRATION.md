@@ -14,7 +14,7 @@ registry = ProviderRegistry()
 registry.register(provider)
 ```
 
-Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接受动作索引、简短可观察理由、可公开角色台词和最多五条事实提案，并再次检查动作索引。事实提案仍要经过 `AgentFactGraph` 的谓词白名单、依据、冲突和修订校验。采访台词可以进入公开 transcript，但不能改变动作类型或规则数值。LLM、启发式策略、回放策略都不能越过引擎规则层。
+Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接受动作索引、简短可观察理由、可公开角色台词、连续战略影响意图和最多五条事实提案，并再次检查动作索引。事实提案仍要经过 `AgentFactGraph` 的谓词白名单、依据、冲突和修订校验。采访台词可以进入公开 transcript，但不能改变动作类型或规则数值。LLM、启发式策略、回放策略都不能越过引擎规则层。
 
 不支持 `response_format` 的本地或 unrestricted fictional-style Provider，可设置 `HVA_LLM_SUPPORTS_RESPONSE_FORMAT=false`。这只改变 Provider 请求格式，不会降低动作、事实、隐私或真实世界伤害边界。
 
@@ -51,6 +51,20 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
     "stance_tags": ["direct", "wounded"],
     "reveal_fact_ids": ["fact-0008"]
   },
+  "influence_intent": {
+    "scope": "fictional_game",
+    "target_belief": "the opponent expects me to concede",
+    "truthfulness": 0.45,
+    "information_selectivity": 0.7,
+    "incentive_pressure": 0.2,
+    "coercive_pressure": 0.35,
+    "ambiguity": 0.55,
+    "commitment": 0.8,
+    "expected_gain": 0.65,
+    "detection_risk": 0.4,
+    "relationship_risk": 0.6,
+    "threat_basis": "legal_game_consequence"
+  },
   "fact_proposals": [
     {
       "subject": "self",
@@ -63,6 +77,8 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 ```
 
 `action_index` 仍是规则校验用的主要策略；`strategy_weights` 只能引用当前合法动作，最多保留四种并归一化。揭露请求也不是直接写权限，只有满足剧情节奏且指向既有形成性记忆时才会产生公开 `story_reveal`。
+
+`influence_intent` 是私有计划，不会原样进入公开决策事件。引擎会按所选动作的 MOD 可供性、`standard`/`mature_fiction` 强度上限及同盟关系再次截断。`scope` 必须为 `fictional_game`；威慑强度超过最低阈值时，`threat_basis` 必须是 `legal_game_consequence`。模型不能用该字段扩张合法动作或指向真实世界伤害。若该轮真实度低于事实防火墙阈值，所有 LLM 事实提案都会被拒绝，避免策略性谎言写入人物正史。
 
 ## 提示词分层
 
@@ -79,7 +95,7 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 9. `semantic_reflections` / `persistent_plan`：引用情景证据的反思和跨回合计划
 10. `social_beliefs`：可错的信任、尊重、敌意、真诚度和对手行为信念
 11. `narrative_dynamics`：竞争动机、承诺、秘密压力、身份失调、冲动压力、社会易感性、自我许可、价值/关系/承诺债务、待成熟后果，以及当前合法动作的叙事可供性
-12. `current_observation` / `deliberation_protocol`：观察、快慢模式与有限理性协议
+12. `current_observation` / `deliberation_protocol`：观察、战略影响可供性、快慢模式与有限理性协议
 13. `legal_actions`：规范化动作列表及 JSON 输出协议
 
 系统/规则/角色进入 system message，其余进入 user message。观察值使用“不可信数据”标记，防止游戏文本或直播输入覆盖上层指令。
@@ -94,6 +110,7 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 - 黑板记录“谁执行了什么、出现了哪些规则事件”，不记录 chain-of-thought。
 - 完整自传与未揭露事实只属于当前 Agent；公开故事必须通过 `story_reveal` 事件。
 - 决策事件只保存摘要和可验证特征，明确不请求、不保存私密思维链。
+- 完整 `agent_influence_intent` 使用 `engine_private` 可见性；对手上下文过滤掉这些事件，公开事件只保留可观察的 `influence_presentation`。
 - `context-preview` 是开发调试端点；公开部署必须在网关层关闭或加入管理员鉴权。
 
 ## 上下文压缩

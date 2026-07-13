@@ -1,5 +1,5 @@
 {
-  "version": "mvp-8",
+  "version": "mvp-9",
   "weights_by_mode": {
     "human_vs_agent": {"player_engagement": 0.23, "engine_generality": 0.13, "dynamism": 0.17, "virtual_player_rating": 0.12, "ai_opponent_intelligence": 0.20, "ai_human_likeness": 0.15},
     "agent_vs_agent": {"engine_generality": 0.15, "dynamism": 0.23, "virtual_player_rating": 0.15, "ai_opponent_intelligence": 0.32, "ai_human_likeness": 0.15},

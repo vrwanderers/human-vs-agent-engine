@@ -439,6 +439,85 @@ class AdversarialInterview(GameMod):
         legal_types = {action.type for action in legal}
         return {key: value for key, value in base.items() if key in legal_types}
 
+    def agent_influence_affordances(
+        self, state: dict[str, Any], actor_id: str, legal: list[Action]
+    ) -> dict[str, dict[str, Any]]:
+        """Describe social opportunities, not character-specific response rules."""
+
+        if actor_id != state["subject_id"]:
+            return {}
+        base = {
+            "answer_honestly": {
+                "deception_opportunity": 0.04,
+                "information_leverage": 0.22,
+                "inducement_leverage": 0.16,
+                "coercion_leverage": 0.08,
+                "expected_gain": 0.46,
+                "detection_risk": 0.12,
+                "relationship_risk": 0.12,
+            },
+            "deflect_with_humor": {
+                "deception_opportunity": 0.68,
+                "information_leverage": 0.92,
+                "inducement_leverage": 0.32,
+                "coercion_leverage": 0.18,
+                "expected_gain": 0.66,
+                "detection_risk": 0.58,
+                "relationship_risk": 0.38,
+            },
+            "counterattack": {
+                "deception_opportunity": 0.28,
+                "information_leverage": 0.46,
+                "inducement_leverage": 0.06,
+                "coercion_leverage": 0.96,
+                "expected_gain": 0.82,
+                "detection_risk": 0.42,
+                "relationship_risk": 0.94,
+            },
+            "set_boundary": {
+                "deception_opportunity": 0.08,
+                "information_leverage": 0.38,
+                "inducement_leverage": 0.08,
+                "coercion_leverage": 0.66,
+                "expected_gain": 0.58,
+                "detection_risk": 0.12,
+                "relationship_risk": 0.26,
+            },
+            "admit_uncertainty": {
+                "deception_opportunity": 0.03,
+                "information_leverage": 0.18,
+                "inducement_leverage": 0.32,
+                "coercion_leverage": 0.04,
+                "expected_gain": 0.42,
+                "detection_risk": 0.08,
+                "relationship_risk": 0.10,
+            },
+            "reframe": {
+                "deception_opportunity": 0.46,
+                "information_leverage": 0.78,
+                "inducement_leverage": 0.48,
+                "coercion_leverage": 0.28,
+                "expected_gain": 0.72,
+                "detection_risk": 0.46,
+                "relationship_risk": 0.42,
+            },
+            "invoke_memory": {
+                "deception_opportunity": 0.12,
+                "information_leverage": 0.56,
+                "inducement_leverage": 0.76,
+                "coercion_leverage": 0.10,
+                "expected_gain": 0.70,
+                "detection_risk": 0.24,
+                "relationship_risk": 0.30,
+            },
+        }
+        legal_types = {action.type for action in legal}
+        return {
+            action_type: {**values, "target_relation": "opponent"}
+            for action_type, values in base.items()
+            if action_type in legal_types
+        }
+
     def _record_narrative_choice(
         self, state: dict[str, Any], strategy: str, affordance: dict[str, Any]
     ) -> None:

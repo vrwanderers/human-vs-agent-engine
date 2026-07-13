@@ -19,6 +19,7 @@ from hva_engine.models import (
     ActorKind,
     AgentCharacterSelection,
     AgentTuning,
+    EventVisibility,
     GameEvent,
     MatchMode,
     MatchStatus,
@@ -56,9 +57,19 @@ class Match:
     def status(self) -> MatchStatus:
         return MatchStatus.FINISHED if self.mod.is_terminal(self.state) else MatchStatus.ACTIVE
 
-    def add_event(self, event_type: str, actor_id: str | None = None, **payload: Any) -> GameEvent:
+    def add_event(
+        self,
+        event_type: str,
+        actor_id: str | None = None,
+        visibility: EventVisibility = EventVisibility.PUBLIC,
+        **payload: Any,
+    ) -> GameEvent:
         event = GameEvent(
-            seq=len(self.events) + 1, type=event_type, actor_id=actor_id, payload=payload
+            seq=len(self.events) + 1,
+            type=event_type,
+            actor_id=actor_id,
+            visibility=visibility,
+            payload=payload,
         )
         self.events.append(event)
         return event
@@ -279,7 +290,7 @@ class GameEngine:
                 match.mod,
                 match.state,
                 match.mod.scores(match.state),
-                match.events,
+                self._events_for_agent(match, actor_id),
                 match.id,
                 shared_facts,
             )
@@ -295,6 +306,13 @@ class GameEngine:
             if action not in legal:
                 raise EngineError("Agent policy returned an illegal action")
             score_before = match.mod.scores(match.state).get(actor_id, 0.0)
+            private_influence = trace.pop("_private_influence_intent")
+            match.add_event(
+                "agent_influence_intent",
+                actor_id,
+                visibility=EventVisibility.ENGINE_PRIVATE,
+                **private_influence,
+            )
             decision_event = match.add_event(
                 "agent_decision", actor_id, action_type=action.type, **trace
             )
@@ -333,6 +351,19 @@ class GameEngine:
             if guard > 100:
                 raise EngineError("Agent turn loop exceeded safety limit")
 
+    def _events_for_agent(self, match: Match, agent_id: str) -> list[GameEvent]:
+        """Return public history plus only this agent's own engine-private intent."""
+
+        return [
+            event
+            for event in match.events
+            if event.visibility == EventVisibility.PUBLIC
+            or (
+                event.visibility == EventVisibility.ENGINE_PRIVATE
+                and event.actor_id == agent_id
+            )
+        ]
+
     def get(self, match_id: str) -> Match:
         try:
             return self.matches[match_id]
@@ -354,7 +385,11 @@ class GameEngine:
             state=match.mod.public_state(match.state),
             legal_actions=legal,
             scores=match.mod.scores(match.state),
-            events=match.events,
+            events=[
+                event
+                for event in match.events
+                if event.visibility == EventVisibility.PUBLIC
+            ],
             agent_summaries={pid: brain.summary() for pid, brain in match.agent_brains.items()},
         )
 

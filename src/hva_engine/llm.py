@@ -37,6 +37,7 @@ class LLMDecisionResult:
     reason: str
     utterance: str | None
     response_plan: dict[str, Any]
+    influence_intent: dict[str, Any]
     fact_proposals: list[dict[str, Any]]
     response: LLMResponse
 
@@ -232,7 +233,60 @@ class LLMDecisionClient:
         utterance_value = choice.get("utterance")
         utterance = str(utterance_value).strip()[:1_600] if utterance_value else None
         response_plan = self._parse_response_plan(choice.get("response_plan"), index, legal_actions)
-        return LLMDecisionResult(index, reason, utterance, response_plan, proposals, response)
+        influence_intent = self._parse_influence_intent(choice.get("influence_intent"))
+        return LLMDecisionResult(
+            index,
+            reason,
+            utterance,
+            response_plan,
+            influence_intent,
+            proposals,
+            response,
+        )
+
+    def _parse_influence_intent(self, raw_intent: Any) -> dict[str, Any]:
+        if raw_intent is None:
+            return {}
+        if not isinstance(raw_intent, dict):
+            raise ValueError("influence_intent must be an object")
+        scope = str(raw_intent.get("scope", "fictional_game"))
+        if scope != "fictional_game":
+            raise ValueError("Strategic influence scope must be fictional_game")
+        threat_basis = str(raw_intent.get("threat_basis", "none"))
+        if threat_basis not in {"none", "legal_game_consequence"}:
+            raise ValueError("Threats may reference only legal in-game consequences")
+        numeric_fields = (
+            "truthfulness",
+            "information_selectivity",
+            "incentive_pressure",
+            "coercive_pressure",
+            "ambiguity",
+            "commitment",
+            "expected_gain",
+            "detection_risk",
+            "relationship_risk",
+        )
+        parsed: dict[str, Any] = {
+            "scope": scope,
+            "threat_basis": threat_basis,
+            "target_belief": " ".join(
+                str(raw_intent.get("target_belief", "")).split()
+            )[:240],
+        }
+        for field_name in numeric_fields:
+            if field_name not in raw_intent:
+                continue
+            try:
+                parsed[field_name] = max(0.0, min(1.0, float(raw_intent[field_name])))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Influence field must be numeric: {field_name}") from exc
+        if parsed.get("coercive_pressure", 0.0) > 0.05 and threat_basis != (
+            "legal_game_consequence"
+        ):
+            raise ValueError(
+                "Coercive pressure requires a legal_game_consequence threat basis"
+            )
+        return parsed
 
     def _parse_response_plan(
         self,

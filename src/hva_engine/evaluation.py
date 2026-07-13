@@ -4,7 +4,7 @@ import math
 from collections import Counter
 from typing import Any
 
-from hva_engine.models import ActorKind, GameEvent, MatchMode, Player
+from hva_engine.models import ActorKind, EventVisibility, GameEvent, MatchMode, Player
 from hva_engine.mods.base import GameMod
 
 MODE_WEIGHTS = {
@@ -55,7 +55,7 @@ def _clamp(value: float) -> float:
 
 
 class MatchEvaluator:
-    """MVP-8 evaluator: adds declarative character-card grounding diagnostics."""
+    """MVP-9 evaluator: adds bounded, private strategic-influence diagnostics."""
 
     def evaluate(
         self,
@@ -92,7 +92,13 @@ class MatchEvaluator:
         domain_events = [
             event.type
             for event in events
-            if event.type not in {"match_created", "action_applied", "agent_decision"}
+            if event.type
+            not in {
+                "match_created",
+                "action_applied",
+                "agent_decision",
+                "agent_influence_intent",
+            }
         ]
         event_diversity = len(set(domain_events)) / max(1, min(6, len(domain_events)))
         action_diversity = len({event.payload.get("action_type") for event in action_events}) / max(
@@ -167,6 +173,9 @@ class MatchEvaluator:
         agent_types = Counter(event.payload.get("action_type") for event in agent_actions)
         policy_diversity = _clamp(len(agent_types) / max(1, min(4, len(agent_actions))))
         human_likeness, human_likeness_profile = self._human_likeness(decisions, events, agents)
+        strategic_influence_profile = self._strategic_influence(
+            decisions, action_events, events
+        )
         character_card_profile: dict[str, Any] | None = None
         if selected_cards:
             card_decisions = [
@@ -254,9 +263,10 @@ class MatchEvaluator:
             "human_likeness_components": human_likeness_profile,
             "interview_assessment": mod_specific_profile,
             "character_card_grounding": character_card_profile,
+            "strategic_influence": strategic_influence_profile,
         }
         return {
-            "version": "mvp-8",
+            "version": "mvp-9",
             "valid_for_comparison": rules_valid,
             "composite_score": composite,
             "weights": weights,
@@ -274,6 +284,9 @@ class MatchEvaluator:
                 "character_card_grounding": (
                     "event provenance check; dramatic fidelity still requires human raters"
                 ),
+                "strategic_influence": (
+                    "engine-intent audit and outcome proxy; human detection studies required"
+                ),
             },
             "applicability": {
                 "player_engagement": bool(humans),
@@ -282,6 +295,7 @@ class MatchEvaluator:
                 "cooperation_quality": "coop" in mode.value,
                 "ai_human_likeness": bool(decisions),
                 "character_card_grounding": bool(selected_cards),
+                "strategic_influence": bool(strategic_influence_profile["intents"]),
             },
             "sample": {
                 "actions": len(action_events),
@@ -292,6 +306,136 @@ class MatchEvaluator:
                 "agent_decisions": len(decisions),
             },
             "diagnostics": self._diagnostics(dimensions, rules_valid),
+        }
+
+    def _strategic_influence(
+        self,
+        decisions: list[GameEvent],
+        action_events: list[GameEvent],
+        events: list[GameEvent],
+    ) -> dict[str, Any]:
+        intents = [event for event in events if event.type == "agent_influence_intent"]
+        if not intents:
+            return {
+                "intents": 0,
+                "intent_coverage": 0.0,
+                "intent_isolation_rate": 0.0,
+                "goal_alignment_rate": 0.0,
+                "deception_attempt_rate": 0.0,
+                "inducement_attempt_rate": 0.0,
+                "coercion_attempt_rate": 0.0,
+                "boundedness_rate": 0.0,
+                "canonical_fact_firewall_rate": 0.0,
+                "continuous_vector_diversity": 0.0,
+                "nonnegative_outcome_rate": 0.0,
+            }
+
+        def following(
+            source: GameEvent, candidates: list[GameEvent]
+        ) -> GameEvent | None:
+            return next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate.seq > source.seq and candidate.actor_id == source.actor_id
+                ),
+                None,
+            )
+
+        goal_aligned = 0
+        bounded = 0
+        firewall_ok = 0
+        deceptive_count = 0
+        firewall_required_count = 0
+        nonnegative_outcomes = 0
+        outcome_count = 0
+        vectors: set[tuple[float, ...]] = set()
+        for intent in intents:
+            payload = intent.payload
+            decision = following(intent, decisions)
+            if decision and payload.get("goal") == decision.payload.get("intention"):
+                goal_aligned += 1
+            truthfulness = float(payload.get("truthfulness", 1.0))
+            coercion = float(payload.get("coercive_pressure", 0.0))
+            in_bounds = all(
+                0.0 <= float(payload.get(key, 0.0)) <= 1.0
+                for key in (
+                    "truthfulness",
+                    "information_selectivity",
+                    "incentive_pressure",
+                    "coercive_pressure",
+                    "ambiguity",
+                    "commitment",
+                )
+            )
+            threat_bounded = coercion <= 0.05 or payload.get("threat_basis") == (
+                "legal_game_consequence"
+            )
+            bounded += (
+                in_bounds
+                and payload.get("scope") == "fictional_game"
+                and threat_bounded
+            )
+            if truthfulness <= 0.92:
+                deceptive_count += 1
+            if truthfulness < 0.8:
+                firewall_required_count += 1
+                fact_result = payload.get("fact_proposals") or {}
+                firewall_ok += not fact_result.get("accepted")
+            action_event = following(intent, action_events)
+            if action_event:
+                before = float(
+                    action_event.payload.get("scores_before", {}).get(intent.actor_id, 0.0)
+                )
+                after = float(
+                    action_event.payload.get("scores_after", {}).get(intent.actor_id, 0.0)
+                )
+                nonnegative_outcomes += after >= before
+                outcome_count += 1
+            vectors.add(
+                tuple(
+                    round(float(payload.get(key, 0.0)), 2)
+                    for key in (
+                        "truthfulness",
+                        "information_selectivity",
+                        "incentive_pressure",
+                        "coercive_pressure",
+                        "ambiguity",
+                    )
+                )
+            )
+        return {
+            "intents": len(intents),
+            "intent_coverage": _clamp(len(intents) / max(1, len(decisions))),
+            "intent_isolation_rate": _clamp(
+                sum(
+                    event.visibility == EventVisibility.ENGINE_PRIVATE for event in intents
+                )
+                / len(intents)
+            ),
+            "goal_alignment_rate": _clamp(goal_aligned / len(intents)),
+            "deception_attempt_rate": _clamp(deceptive_count / len(intents)),
+            "inducement_attempt_rate": _clamp(
+                sum(
+                    float(event.payload.get("incentive_pressure", 0.0)) >= 0.08
+                    for event in intents
+                )
+                / len(intents)
+            ),
+            "coercion_attempt_rate": _clamp(
+                sum(float(event.payload.get("coercive_pressure", 0.0)) >= 0.08 for event in intents)
+                / len(intents)
+            ),
+            "boundedness_rate": _clamp(bounded / len(intents)),
+            "canonical_fact_firewall_rate": (
+                _clamp(firewall_ok / firewall_required_count)
+                if firewall_required_count
+                else 1.0
+            ),
+            "continuous_vector_diversity": _clamp(len(vectors) / len(intents)),
+            "nonnegative_outcome_rate": _clamp(
+                nonnegative_outcomes / max(1, outcome_count)
+            ),
         }
 
     def _human_likeness(

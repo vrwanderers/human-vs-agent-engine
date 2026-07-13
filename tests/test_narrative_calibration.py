@@ -159,7 +159,7 @@ def test_match_evaluation_exposes_narrative_dynamics_without_private_reasoning()
     )
     evaluation = engine.evaluation(view.id)
     components = evaluation["ai_capability_profile"]["human_likeness_components"]
-    assert evaluation["version"] == "mvp-8"
+    assert evaluation["version"] == "mvp-9"
     assert components["motivational_conflict"] > 0
     assert components["consequence_hysteresis"] > 0
     assert components["distortion_pressure"] > 0

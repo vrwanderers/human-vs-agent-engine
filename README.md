@@ -14,6 +14,8 @@
 - 声明式人物卡：可选择 5 张内置人物卡或提交玩家原创卡；卡片只提供身份、经历、人格、动机和承诺，不含固定动作、台词或问题—回答映射
 - 渐进式角色故事揭露：关键回合、压力、受挫、信任和终局会产生 `story_reveal` 事件
 - 连续混合应对：采访中的七类策略是内部行为坐标，每次回答混合 2–4 类策略及情绪强度，而不是传统 NPC 的固定单选招式
+- 目标驱动的连续战略影响：Agent 可按目标、人格、压力、关系与场景机会组合选择性披露、误导、利诱和游戏内威慑；这些不是固定招式池
+- 战略意图隔离：真实度、目标信念和识破风险仅写入所属 Agent 的引擎私有事件，玩家和其他 Agent 只能观察公开言行
 - 受约束的事实图谱：核心身世不可覆盖，自由发挥必须引用事实依据，可变事实保留修订链
 - 可选 Neo4j 持久化，存储 Agent、事实、揭露状态和 `SUPERSEDES` 关系
 - Agent 私有上下文隔离、分层提示、确定性记忆压缩与协作共享黑板
@@ -89,7 +91,7 @@ curl -X POST http://127.0.0.1:8000/api/matches \
 
 人物卡只作为稳定身份先验，实时动作仍由世界状态、私有记忆、心理矩阵、社会信念、人物动力和 MOD 合法动作共同推演。自定义人物卡使用同一 `CharacterCardSpec`，未知字段和 `action_rules` 会被拒绝。
 
-Agent-only 对局会自动运行到终局。响应中的 `agent_summaries` 暴露世界模型、心理矩阵、公开身份片段、叙事进度和公开事实图谱；事件流中的 `agent_decision` 保存可观察的简短理由、置信度与预期效果，但不保存私密思维链。
+Agent-only 对局会自动运行到终局。响应中的 `agent_summaries` 暴露世界模型、心理矩阵、公开身份片段、叙事进度和公开事实图谱；事件流中的 `agent_decision` 保存可观察的简短理由、置信度、预期效果和影响表现，但不保存私密思维链或战略底牌。引擎内部的 `agent_influence_intent` 事件不会进入 `MatchView`，且其他 Agent 只能收到公开事件和自己的私有意图。
 
 默认 MVP 使用可复现的启发式 Agent，便于建立评价基线；`hva_engine.llm` 已提供分层上下文、Provider 注册表和严格动作索引解析，可在不改 MOD 规则的前提下替换为真实 LLM。
 
@@ -135,7 +137,7 @@ uvicorn hva_engine.api:app --reload
 
 Docker 开发环境可用 `HVA_FACT_STORE=neo4j docker compose --profile neo4j up --build`。详细约束见 [事实图谱](docs/FACT_GRAPH.md)。
 
-运行评分 MVP-8 的多种子镜像基准（对抗模式会交换双方席位）：
+运行评分 MVP-9 的多种子镜像基准（对抗模式会交换双方席位）：
 
 ```bash
 python -m hva_engine.benchmark --seeds 25
@@ -157,7 +159,7 @@ python -m hva_engine.narrative_calibration
 4. **直播输入也是动作源**：弹幕与 Godot、Web 控制台共享同一校验链路。
 5. **用 MVP 数据升级架构**：评价低分对应明确的下一轮改造方向。
 
-详细内容见 [人物卡](docs/CHARACTER_CARDS.md)、[研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[叙事人物决策校准](docs/NARRATIVE_CHARACTER_CALIBRATION.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
+详细内容见 [战略影响机制](docs/STRATEGIC_INFLUENCE.md)、[人物卡](docs/CHARACTER_CARDS.md)、[研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[叙事人物决策校准](docs/NARRATIVE_CHARACTER_CALIBRATION.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
 
 ## 弹幕命令
 
@@ -171,7 +173,7 @@ python -m hva_engine.narrative_calibration
 
 ## 路线图
 
-- M1：独立标注全新叙事人物 holdout，并采集真实玩家/Agent 双盲基线，分别校准叙事忠实度与真人感
+- M1：独立标注全新叙事人物 holdout，并采集真实玩家/Agent 双盲基线，分别校准叙事忠实度、真人感与欺骗识破/反噬曲线
 - M2：加入并行回合、隐藏信息、回放与持久化
 - M3：远程 LLM Agent 沙箱、Elo/Glicko 锦标赛和观众投票窗口
 - M4：MOD SDK、资产协议、直播平台正式适配器与 Godot 可视化组件库

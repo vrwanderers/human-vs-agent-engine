@@ -30,6 +30,11 @@ class ContentMode(StrEnum):
     MATURE_FICTION = "mature_fiction"
 
 
+class EventVisibility(StrEnum):
+    PUBLIC = "public"
+    ENGINE_PRIVATE = "engine_private"
+
+
 class AgentTuning(BaseModel):
     """Per-match cognitive style; engine rules remain authoritative in every mode."""
 
@@ -165,6 +170,7 @@ class GameEvent(BaseModel):
     seq: int
     type: str
     actor_id: str | None = None
+    visibility: EventVisibility = EventVisibility.PUBLIC
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

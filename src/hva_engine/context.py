@@ -108,6 +108,7 @@ class ContextComposer:
         activated_traits: dict[str, Any] | None = None,
         decision_mode: str = "deliberative",
         narrative_dynamics: dict[str, Any] | None = None,
+        influence_affordances: dict[str, Any] | None = None,
     ) -> ContextPacket:
         memory_text, compressed = self._compress_memory(memory)
         shared = [fact.fact for fact in shared_facts[-self.policy.shared_fact_limit :]]
@@ -147,8 +148,11 @@ class ContextComposer:
             "with uncertainty. Let competing motives, commitments, secrets, resentment, shame, "
             "and prior consequences bias the decision without overriding facts or rules. For "
             "social responses, blend two to four legal strategies. Bounded rationality is allowed, "
-            "but do not invent facts or actions. Keep private reasoning private and return only "
-            "observable summaries."
+            "but do not invent facts or actions. Strategic deception, inducement, and pressure may "
+            "shape only beliefs inside this fictional match. Deception cannot create canonical "
+            "identity/history facts. Threats may name only legal in-game consequences; never "
+            "target real people, protected traits, private data, or real-world safety. "
+            "Keep private reasoning private and return only observable summaries."
         )
         output_contract = (
             '\nReturn JSON only: {"action_index": <integer>, '
@@ -157,6 +161,13 @@ class ContextComposer:
             '"response_plan": {"strategy_weights": {"legal_action_type": 0.0}, '
             '"intensity": 0.0, "emotional_display": "...", '
             '"stance_tags": ["..."], "reveal_fact_ids": ["fact-..."]}, '
+            '"influence_intent": {"scope": "fictional_game", '
+            '"target_belief": "brief intended game-world belief", "truthfulness": 0.0, '
+            '"information_selectivity": 0.0, "incentive_pressure": 0.0, '
+            '"coercive_pressure": 0.0, "ambiguity": 0.0, "commitment": 0.0, '
+            '"expected_gain": 0.0, "detection_risk": 0.0, '
+            '"relationship_risk": 0.0, '
+            '"threat_basis": "none|legal_game_consequence"}, '
             '"fact_proposals": [{"subject": "...", "predicate": "...", "object": {}, '
             '"basis_fact_ids": ["fact-..."]}]}'
         )
@@ -186,7 +197,13 @@ class ContextComposer:
             ),
             (
                 "current_observation",
-                self._json({"state": state, "world_model": world_model}),
+                self._json(
+                    {
+                        "state": state,
+                        "world_model": world_model,
+                        "strategic_influence_affordances": influence_affordances or {},
+                    }
+                ),
                 2_500,
             ),
             (
@@ -240,6 +257,7 @@ class ContextComposer:
                 "social_beliefs_layered": bool(social_beliefs),
                 "trait_activation_layered": bool(activated_traits),
                 "narrative_dynamics_layered": bool(narrative_dynamics),
+                "influence_affordances_layered": bool(influence_affordances),
                 "decision_mode": decision_mode,
                 "fact_graph_layered": bool(fact_graph),
                 "private_chain_of_thought": "not_requested_or_stored",
