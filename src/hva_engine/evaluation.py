@@ -55,7 +55,7 @@ def _clamp(value: float) -> float:
 
 
 class MatchEvaluator:
-    """MVP-3 evaluator: adds human-likeness and narrative/psychology evidence."""
+    """MVP-4 evaluator: measures causal cognitive continuity, not fluent imitation."""
 
     def evaluate(
         self,
@@ -226,7 +226,7 @@ class MatchEvaluator:
             "interview_assessment": mod_specific_profile,
         }
         return {
-            "version": "mvp-3",
+            "version": "mvp-4",
             "valid_for_comparison": rules_valid,
             "composite_score": composite,
             "weights": weights,
@@ -238,6 +238,9 @@ class MatchEvaluator:
                 "memory_effectiveness": "influence_proxy; ablation_required",
                 "dynamism": "within_match_trajectory",
                 "ai_human_likeness": "behavioral_proxy; human panel calibration required",
+                "research_validity": (
+                    "architecture-grounded proxy; not evidence that an LLM reproduces humans"
+                ),
             },
             "applicability": {
                 "player_engagement": bool(humans),
@@ -270,6 +273,13 @@ class MatchEvaluator:
                 "intention_persistence": 0.0,
                 "bounded_rationality": 0.0,
                 "narrative_revelation": 0.0,
+                "memory_retrieval_grounding": 0.0,
+                "reflection_evidence": 0.0,
+                "appraisal_emotion_coherence": 0.0,
+                "social_belief_modeling": 0.0,
+                "situation_trait_activation": 0.0,
+                "plan_persistence_and_replanning": 0.0,
+                "expression_internal_gap": 0.0,
             }
             return 0.0, empty
 
@@ -333,6 +343,92 @@ class MatchEvaluator:
         reveals = [event for event in events if event.type == "story_reveal"]
         narrative_revelation = _clamp(len(reveals) / max(1, len(agents) * 3))
 
+        retrieval_expected = max(1, len(decisions) - len(agents))
+        memory_retrieval_grounding = _clamp(
+            sum(bool(event.payload.get("retrieved_memory_ids")) for event in decisions)
+            / retrieval_expected
+        )
+        reflection_payloads = [
+            reflection
+            for event in decisions
+            for reflection in event.payload.get("reflections", [])
+            if isinstance(reflection, dict)
+        ]
+        if reflection_payloads:
+            reflection_evidence = _clamp(
+                sum(bool(item.get("evidence_memory_ids")) for item in reflection_payloads)
+                / len(reflection_payloads)
+            )
+        else:
+            reflection_evidence = 0.5 if len(decisions) < 4 else 0.0
+
+        appraisal_scores: list[float] = []
+        for event in decisions:
+            appraisal = event.payload.get("appraisal", {})
+            matrix = event.payload.get("psychological_matrix", {})
+            if not appraisal or not matrix:
+                continue
+            threat = float(appraisal.get("social_threat", 0.0))
+            incongruence = 1 - float(appraisal.get("goal_congruence", 0.5))
+            expected_activation = _clamp(0.18 + 0.52 * threat + 0.30 * incongruence)
+            actual_activation = max(
+                float(matrix.get("stress", 0.0)),
+                float(matrix.get("anger", 0.0)),
+                float(matrix.get("fear", 0.0)),
+            )
+            appraisal_scores.append(_clamp(1 - abs(expected_activation - actual_activation)))
+        appraisal_emotion_coherence = _clamp(
+            sum(appraisal_scores) / max(1, len(appraisal_scores))
+        )
+        social_belief_modeling = _clamp(
+            sum(
+                bool(event.payload.get("social_beliefs", {}).get("predicted_intent"))
+                for event in decisions
+            )
+            / len(decisions)
+        )
+        situation_trait_activation = _clamp(
+            sum(
+                bool(event.payload.get("activated_traits", {}).get("activation_reason"))
+                for event in decisions
+            )
+            / len(decisions)
+        )
+        plan_transitions = 0
+        plausible_plan_transitions = 0
+        for agent_id in agents:
+            agent_decisions = [event for event in decisions if event.actor_id == agent_id]
+            for previous, current in zip(agent_decisions, agent_decisions[1:], strict=False):
+                previous_plan = previous.payload.get("current_plan", {})
+                current_plan = current.payload.get("current_plan", {})
+                if not previous_plan or not current_plan:
+                    continue
+                plan_transitions += 1
+                persisted = (
+                    current_plan.get("goal") == previous_plan.get("goal")
+                    and int(current_plan.get("age", 0)) >= int(previous_plan.get("age", 0))
+                )
+                justified_replan = (
+                    int(current_plan.get("revision", 0))
+                    > int(previous_plan.get("revision", 0))
+                    and current_plan.get("last_replan_reason")
+                    in {"goal_incongruence", "prediction_failure", "coping_overload"}
+                )
+                plausible_plan_transitions += persisted or justified_replan
+        plan_persistence = _clamp(
+            0.5 if not plan_transitions else plausible_plan_transitions / plan_transitions
+        )
+        gaps = [
+            float(event.payload.get("response_plan", {}).get("expression_gap", 0.0))
+            for event in decisions
+            if "expression_gap" in event.payload.get("response_plan", {})
+        ]
+        expression_internal_gap = _clamp(
+            0.0
+            if not gaps
+            else sum(_clamp(1 - abs(gap - 0.16) / 0.22) for gap in gaps) / len(gaps)
+        )
+
         profile = {
             "persona_stability": _clamp(persona_stability),
             "identity_continuity": _clamp(identity_continuity),
@@ -342,16 +438,30 @@ class MatchEvaluator:
             "intention_persistence": intention_persistence,
             "bounded_rationality": bounded_rationality,
             "narrative_revelation": narrative_revelation,
+            "memory_retrieval_grounding": memory_retrieval_grounding,
+            "reflection_evidence": reflection_evidence,
+            "appraisal_emotion_coherence": appraisal_emotion_coherence,
+            "social_belief_modeling": social_belief_modeling,
+            "situation_trait_activation": situation_trait_activation,
+            "plan_persistence_and_replanning": plan_persistence,
+            "expression_internal_gap": expression_internal_gap,
         }
         score = _clamp(
-            0.12 * profile["persona_stability"]
-            + 0.12 * profile["identity_continuity"]
-            + 0.16 * profile["psychological_modeling"]
-            + 0.12 * profile["psychological_dynamics"]
-            + 0.10 * profile["opponent_modeling"]
-            + 0.10 * profile["intention_persistence"]
-            + 0.10 * profile["bounded_rationality"]
-            + 0.18 * profile["narrative_revelation"]
+            0.07 * profile["persona_stability"]
+            + 0.07 * profile["identity_continuity"]
+            + 0.06 * profile["psychological_modeling"]
+            + 0.07 * profile["psychological_dynamics"]
+            + 0.05 * profile["opponent_modeling"]
+            + 0.05 * profile["intention_persistence"]
+            + 0.06 * profile["bounded_rationality"]
+            + 0.08 * profile["narrative_revelation"]
+            + 0.07 * profile["memory_retrieval_grounding"]
+            + 0.06 * profile["reflection_evidence"]
+            + 0.08 * profile["appraisal_emotion_coherence"]
+            + 0.06 * profile["social_belief_modeling"]
+            + 0.06 * profile["situation_trait_activation"]
+            + 0.08 * profile["plan_persistence_and_replanning"]
+            + 0.08 * profile["expression_internal_gap"]
         )
         return score, profile
 
@@ -412,7 +522,7 @@ class MatchEvaluator:
         )
         average_range = sum(ranges) / max(1, len(ranges))
         # A believable arc changes under pressure without becoming pure random volatility.
-        psychological_reactivity = _clamp(1 - abs(average_range - 0.22) / 0.18)
+        psychological_reactivity = _clamp(1 - abs(average_range - 0.30) / 0.24)
         pressure_signal_grounding = _clamp(
             sum(
                 bool(event.payload.get("world_model", {}).get("mod_psychological_signals"))

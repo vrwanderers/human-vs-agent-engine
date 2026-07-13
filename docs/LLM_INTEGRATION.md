@@ -73,17 +73,19 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 3. `model_boundary`：模型能力与引擎策略分离
 4. `agent_role`：对抗/协作角色和对局身份
 5. `fictional_identity` / `stable_persona`：私有自传、价值观和稳定人格
-6. `shared_facts` / `compressed_private_memory`：团队事实与私有情景记忆
+6. `shared_facts` / `compressed_private_memory`：团队事实与按显著性检索的私有记忆
 7. `canonical_fact_graph`：当前可用事实及自由发挥约束
-8. `cognitive_state` / `opponent_beliefs`：心理矩阵和可错的对手模型
-9. `current_observation` / `deliberation_protocol`：观察与有限理性协议
-10. `legal_actions`：规范化动作列表及 JSON 输出协议
+8. `appraisal_and_coping` / `situation_activated_traits`：评价、应对、心理矩阵和情境人格
+9. `semantic_reflections` / `persistent_plan`：引用情景证据的反思和跨回合计划
+10. `social_beliefs`：可错的信任、尊重、敌意、真诚度和对手行为信念
+11. `current_observation` / `deliberation_protocol`：观察、快慢模式与有限理性协议
+12. `legal_actions`：规范化动作列表及 JSON 输出协议
 
 系统/规则/角色进入 system message，其余进入 user message。观察值使用“不可信数据”标记，防止游戏文本或直播输入覆盖上层指令。
 
 ## 隔离与共享
 
-- 每个 `AgentBrain` 持有独立的 `deque` 记忆与独立 `ContextPacket`。
+- 每个 `AgentBrain` 持有独立的四类记忆系统与独立 `ContextPacket`。
 - 对手看不到彼此的私有记忆、提示词或决策理由。
 - 协作 Agent 只能通过 `SharedBlackboard` 共享事实。
 - 黑板记录“谁执行了什么、出现了哪些规则事件”，不记录 chain-of-thought。
@@ -93,12 +95,12 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
 
 ## 上下文压缩
 
-默认上下文预算为 12,000 字符，私有记忆预算为 2,400 字符。超出时：
+默认上下文预算为 12,000 字符，私有检索记忆预算为 2,400 字符。超出时：
 
 - 固定保留系统安全、规则、角色、当前观察和合法动作；
-- 近期记忆保留 4 条；
-- 更早记忆压缩为动作计数和结果事件计数；
-- 事实图谱、心理状态、对手模型、当前观察和合法动作分别分配字符预算；
+- 认知层先按时近性、重要性、相关性和情绪一致性选择至多 4 条情景记忆；
+- 只把检索结果注入 Provider，未选中的私有经历不会因为靠近上下文尾部而自动进入；
+- 事实图谱、评价/应对、反思、计划、社会信念、当前观察和合法动作分别分配字符预算；
 - 总预算触顶时逐层压缩内容，但保留所有层级标题和首尾证据，不再从整段尾部截断；
 - 不用另一个 LLM 做摘要，避免摘要成本、漂移和跨 Agent 泄露；
 - 诊断字段记录是否压缩、压缩前条数、共享事实数和最终字符量。

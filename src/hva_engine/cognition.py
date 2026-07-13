@@ -56,6 +56,13 @@ class CognitiveProfile:
     adaptability: float
     machiavellianism: float
     decision_noise: float
+    openness: float
+    conscientiousness: float
+    extraversion: float
+    agreeableness: float
+    neuroticism: float
+    coping_style: str
+    display_rule: str
 
     @classmethod
     def sample(cls, rng: Random, role: str, policy: RuntimeBehaviorPolicy) -> CognitiveProfile:
@@ -75,6 +82,24 @@ class CognitiveProfile:
             return round(_clamp(value + rng.uniform(-0.09, 0.09)), 3)
 
         shadow = policy.effective_shadow_intensity
+        big_five = {
+            "strategist": (0.68, 0.84, 0.34, 0.48, 0.42),
+            "opportunist": (0.78, 0.42, 0.76, 0.38, 0.55),
+            "guardian": (0.55, 0.78, 0.58, 0.84, 0.46),
+            "provocateur": (0.82, 0.44, 0.80, 0.24, 0.64),
+        }[archetype]
+        coping_style = {
+            "strategist": "problem_focused",
+            "opportunist": "adaptive_avoidant",
+            "guardian": "support_seeking",
+            "provocateur": "confrontational",
+        }[archetype]
+        display_rule = {
+            "strategist": "mask_until_evidence_is_clear",
+            "opportunist": "perform_confidence",
+            "guardian": "soften_to_preserve_relationship",
+            "provocateur": "amplify_anger_hide_fear",
+        }[archetype]
         return cls(
             archetype=archetype,
             risk_tolerance=jitter(base[0]),
@@ -85,7 +110,40 @@ class CognitiveProfile:
             adaptability=jitter(base[5]),
             machiavellianism=jitter(base[6] + 0.45 * shadow),
             decision_noise=round(0.04 + 0.18 * policy.realism + rng.uniform(0.0, 0.05), 3),
+            openness=jitter(big_five[0]),
+            conscientiousness=jitter(big_five[1]),
+            extraversion=jitter(big_five[2]),
+            agreeableness=jitter(big_five[3] * (1 - 0.25 * shadow)),
+            neuroticism=jitter(big_five[4]),
+            coping_style=coping_style,
+            display_rule=display_rule,
         )
+
+    def activated_traits(self, situation: dict[str, float]) -> dict[str, Any]:
+        """Activate stable traits only when the situation makes them relevant."""
+
+        social_threat = _clamp(float(situation.get("social_threat", 0.0)))
+        uncertainty = _clamp(float(situation.get("uncertainty", 0.0)))
+        cooperation = _clamp(float(situation.get("cooperation", 0.0)))
+        stakes = _clamp(float(situation.get("stakes", 0.0)))
+        activated = {
+            "openness": self.openness * (0.35 + 0.65 * uncertainty),
+            "conscientiousness": self.conscientiousness * (0.35 + 0.65 * stakes),
+            "extraversion": self.extraversion * (0.4 + 0.6 * social_threat),
+            "agreeableness": self.agreeableness * (0.3 + 0.7 * cooperation),
+            "neuroticism": self.neuroticism * (0.3 + 0.7 * social_threat),
+        }
+        dominant = max(activated, key=activated.get)
+        return {
+            "values": {key: round(_clamp(value), 3) for key, value in activated.items()},
+            "dominant": dominant,
+            "activation_reason": (
+                "social_threat" if social_threat >= max(uncertainty, cooperation, stakes)
+                else "uncertainty" if uncertainty >= max(cooperation, stakes)
+                else "cooperation" if cooperation >= stakes
+                else "stakes"
+            ),
+        }
 
     def public_view(self) -> dict[str, Any]:
         return {
@@ -98,6 +156,15 @@ class CognitiveProfile:
             "adaptability": self.adaptability,
             "machiavellianism": self.machiavellianism,
             "decision_noise": self.decision_noise,
+            "big_five": {
+                "openness": self.openness,
+                "conscientiousness": self.conscientiousness,
+                "extraversion": self.extraversion,
+                "agreeableness": self.agreeableness,
+                "neuroticism": self.neuroticism,
+            },
+            "coping_style": self.coping_style,
+            "display_rule": self.display_rule,
         }
 
 

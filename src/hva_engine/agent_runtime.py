@@ -16,6 +16,15 @@ from hva_engine.cognition import (
 )
 from hva_engine.context import ContextComposer, ContextPacket, SharedFact
 from hva_engine.fact_graph import AgentFactGraph, FactGraphError
+from hva_engine.human_cognition import (
+    AppraisalState,
+    DecisionMode,
+    MemorySystem,
+    PlanState,
+    SocialBelief,
+    appraise,
+    select_decision_mode,
+)
 from hva_engine.llm import LLMDecisionClient
 from hva_engine.models import Action, GameEvent
 from hva_engine.mods.base import GameMod
@@ -50,6 +59,13 @@ class AgentBrain:
     world_model: dict[str, Any] = field(default_factory=dict)
     cognition: CognitiveState = field(default_factory=CognitiveState)
     opponent_model: dict[str, Any] = field(default_factory=dict)
+    memory_system: MemorySystem = field(default_factory=MemorySystem)
+    social_belief: SocialBelief = field(default_factory=SocialBelief)
+    plan: PlanState = field(default_factory=PlanState)
+    last_appraisal: AppraisalState | None = None
+    decision_mode: DecisionMode = DecisionMode.DELIBERATIVE
+    retrieved_memories: list[dict[str, Any]] = field(default_factory=list)
+    activated_traits: dict[str, Any] = field(default_factory=dict)
     decisions: int = 0
     last_context: ContextPacket | None = None
     _match_id: str = ""
@@ -145,8 +161,66 @@ class AgentBrain:
             )
         mod_psychology = mod.agent_psychological_signals(state, self.player_id)
         self.cognition.apply_adjustments(mod_psychology)
+        new_external_events = [
+            event
+            for event in events
+            if event.seq > self._observed_event_seq and event.actor_id != self.player_id
+        ]
+        hostile_severity = max(
+            (
+                float(event.payload.get("severity", 0.0))
+                for event in new_external_events
+                if event.type == "interview_question"
+            ),
+            default=0.0,
+        )
+        self.last_appraisal = appraise(
+            score_delta=latest_delta,
+            margin=margin,
+            surprise=self.cognition.surprise,
+            mod_signals=mod_psychology,
+            hostile_severity=hostile_severity,
+            uncertainty=self.cognition.uncertainty,
+        )
+        self.cognition.apply_adjustments(
+            {
+                "stress": 0.10 * self.last_appraisal.social_threat
+                + 0.08 * (1 - self.last_appraisal.goal_congruence)
+                - 0.06 * self.last_appraisal.controllability,
+                "anger": 0.09
+                * self.last_appraisal.other_agency
+                * (1 - self.last_appraisal.norm_compatibility),
+                "fear": 0.08
+                * self.last_appraisal.social_threat
+                * (1 - self.last_appraisal.controllability),
+            }
+        )
+        self.social_belief.update(
+            hostile_severity=hostile_severity,
+            cooperative_signal=min(1.0, len(shared_facts or []) / 4),
+            observed=bool(new_external_events),
+        )
         self._update_opponent_model(events)
         self._update_intention("coop" in self.role)
+        self.plan.update(
+            desired_goal=self.cognition.intention,
+            surprise=self.cognition.surprise,
+            stress=self.cognition.stress,
+            goal_congruence=self.last_appraisal.goal_congruence,
+        )
+        self.activated_traits = self.profile.activated_traits(
+            {
+                "social_threat": self.last_appraisal.social_threat,
+                "uncertainty": self.cognition.uncertainty,
+                "cooperation": 1.0 if "coop" in self.role else self.social_belief.trust,
+                "stakes": min(1.0, abs(margin) + self.cognition.stress),
+            }
+        )
+        self.decision_mode = select_decision_mode(
+            stress=self.cognition.stress,
+            uncertainty=self.cognition.uncertainty,
+            stakes=min(1.0, abs(margin) + hostile_severity),
+        )
         intention_fact = self.fact_graph.upsert_runtime(
             "state.current_intention", self.cognition.intention
         )
@@ -192,6 +266,11 @@ class AgentBrain:
             "shared_fact_count": len(shared_facts or []),
             "belief_uncertainty": round(self.cognition.uncertainty, 3),
             "opponent_model": self.opponent_model,
+            "social_belief": self.social_belief.public_view(),
+            "appraisal": self.last_appraisal.public_view(),
+            "plan": self.plan.public_view(),
+            "activated_traits": self.activated_traits,
+            "decision_mode": self.decision_mode.value,
             "mod_psychological_signals": {
                 key: round(value, 3) for key, value in mod_psychology.items()
             },
@@ -211,6 +290,22 @@ class AgentBrain:
     ) -> tuple[Action, dict[str, Any]]:
         if not legal:
             raise ValueError("Agent cannot decide without legal actions")
+        current_turn = int(state.get("turn", self.decisions))
+        query = " ".join(
+            [
+                mod.id,
+                self.cognition.intention,
+                self.plan.subgoal,
+                *(action.type for action in legal),
+                *(self.world_model.get("recent_events", [])),
+            ]
+        )
+        self.retrieved_memories = self.memory_system.retrieve(
+            query,
+            current_turn=current_turn,
+            mood_valence=self.cognition.morale - self.cognition.frustration,
+            limit=4,
+        )
         self.last_context = ContextComposer().compose(
             match_id=self._match_id,
             agent_id=self.player_id,
@@ -218,7 +313,7 @@ class AgentBrain:
             mod=mod,
             state=state,
             world_model=self.world_model,
-            memory=[item.__dict__ for item in self.memory],
+            memory=self.retrieved_memories,
             legal_actions=legal,
             shared_facts=self._shared_facts,
             persona=self.profile.public_view(),
@@ -227,12 +322,19 @@ class AgentBrain:
             opponent_model=self.opponent_model,
             behavior_policy=self.behavior_policy.public_view(),
             fact_graph=self.fact_graph.private_view(),
+            appraisal=self.last_appraisal.public_view() if self.last_appraisal else {},
+            reflections=[item.public_view() for item in self.memory_system.reflections[-4:]],
+            current_plan=self.plan.public_view(),
+            social_beliefs=self.social_belief.public_view(),
+            activated_traits=self.activated_traits,
+            decision_mode=self.decision_mode.value,
         )
         baseline_action = mod.agent_action(state, self.player_id, legal, rng)
         learned: dict[str, list[float]] = {}
         for item in self.memory:
             learned.setdefault(item.action, []).append(item.score_delta - 0.15 * item.regret)
         averages = {key: sum(values) / len(values) for key, values in learned.items()}
+        averages.update(self.memory_system.procedural_values())
         last_action = self.memory[-1].action if self.memory else None
         utilities, components = action_utilities(
             legal=legal,
@@ -261,18 +363,63 @@ class AgentBrain:
                 if not llm_fallback:
                     raise
                 llm_error = {"type": type(exc).__name__, "message": str(exc)[:500]}
-                choice_index = bounded_choice(utilities, self.behavior_policy.realism, rng)
+                choice_index = bounded_choice(
+                    utilities,
+                    min(
+                        1.0,
+                        max(
+                            0.0,
+                            self.behavior_policy.realism
+                            + (
+                                0.18
+                                if self.decision_mode == DecisionMode.HABITUAL
+                                else -0.08
+                            ),
+                        ),
+                    ),
+                    rng,
+                )
         else:
-            choice_index = bounded_choice(utilities, self.behavior_policy.realism, rng)
+            choice_index = bounded_choice(
+                utilities,
+                min(
+                    1.0,
+                    max(
+                        0.0,
+                        self.behavior_policy.realism
+                        + (0.18 if self.decision_mode == DecisionMode.HABITUAL else -0.08),
+                    ),
+                ),
+                rng,
+            )
         action = legal[choice_index]
         response_plan = (
             llm_decision.response_plan
             if llm_decision is not None
             else self._baseline_response_plan(mod, legal, utilities, choice_index)
         )
+        internal_intensity = max(
+            self.cognition.stress,
+            self.cognition.anger,
+            self.cognition.fear,
+            self.cognition.arousal,
+        )
+        requested_display = float(response_plan.get("intensity", internal_intensity))
+        masking = 0.34 * self.profile.conscientiousness + 0.22 * self.profile.agreeableness
+        if self.profile.display_rule == "amplify_anger_hide_fear" and self.cognition.anger > 0.45:
+            displayed_intensity = min(1.0, requested_display + 0.12 * self.profile.extraversion)
+        else:
+            displayed_intensity = max(0.0, requested_display * (1 - 0.35 * masking))
+        response_plan = {
+            **response_plan,
+            "internal_emotion_intensity": round(internal_intensity, 3),
+            "displayed_emotion_intensity": round(displayed_intensity, 3),
+            "expression_gap": round(abs(internal_intensity - displayed_intensity), 3),
+            "display_rule": self.profile.display_rule,
+        }
         best_index = max(range(len(utilities)), key=utilities.__getitem__)
         regret = max(0.0, utilities[best_index] - utilities[choice_index])
-        memory_used = len(self.memory) >= 2
+        memory_used = bool(self.retrieved_memories)
         memory_influenced = memory_used and bool(averages.get(action.type))
         ranked_factors = sorted(
             components[choice_index].items(), key=lambda item: abs(item[1]), reverse=True
@@ -323,12 +470,20 @@ class AgentBrain:
             "memory_used": memory_used,
             "memory_influenced": memory_influenced,
             "memory_depth": len(self.memory),
+            "retrieved_memories": self.retrieved_memories,
+            "retrieved_memory_ids": [item["id"] for item in self.retrieved_memories],
+            "reflections": [item.public_view() for item in self.memory_system.reflections[-4:]],
             "world_model": self.world_model,
             "persona": self.profile.public_view(),
             "identity": self.identity.public_view(self._revealed_story_titles),
             "cognitive_state": self.cognition.public_view(),
             "psychological_matrix": self.cognition.psychology_view(),
             "opponent_model": self.opponent_model,
+            "social_beliefs": self.social_belief.public_view(),
+            "appraisal": self.last_appraisal.public_view() if self.last_appraisal else {},
+            "current_plan": self.plan.public_view(),
+            "activated_traits": self.activated_traits,
+            "decision_mode": self.decision_mode.value,
             "intention": self.cognition.intention,
             "behavior_policy": self.behavior_policy.public_view(),
             "fact_graph": self.fact_graph.public_view(),
@@ -347,6 +502,14 @@ class AgentBrain:
                 "opponent_modeled": bool(self.opponent_model),
                 "persistent_intention": self.cognition.intention_age > 0,
                 "bounded_rationality": self.profile.decision_noise > 0,
+                "retrieval_grounded": bool(self.retrieved_memories),
+                "reflection_evidence_backed": all(
+                    item.evidence_memory_ids for item in self.memory_system.reflections
+                ),
+                "appraisal_driven_emotion": self.last_appraisal is not None,
+                "situation_activated_traits": bool(self.activated_traits),
+                "persistent_plan": self.plan.age > 0,
+                "expression_is_not_internal_state": response_plan["expression_gap"] > 0.01,
             },
             "predicted_effect": prediction["description"],
             "prediction": prediction,
@@ -477,6 +640,26 @@ class AgentBrain:
                 regret=float(trace.get("decision_regret_proxy", 0.0)),
             )
         )
+        emotional_intensity = max(
+            self.cognition.stress,
+            self.cognition.frustration,
+            self.cognition.anger,
+            self.cognition.fear,
+        )
+        self.memory_system.record(
+            turn=turn,
+            content=(
+                f"I chose {action.type} while pursuing {self.plan.goal}; "
+                f"observed {','.join(actual) or 'state change'}"
+            ),
+            action=action.type,
+            outcome_events=actual,
+            score_delta=score_after - score_before,
+            surprise=surprise,
+            emotional_intensity=emotional_intensity,
+            tags=(self.plan.goal, self.cognition.intention, self.role),
+        )
+        self.memory_system.maybe_reflect(turn)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -487,11 +670,18 @@ class AgentBrain:
             "cognitive_state": self.cognition.public_view(),
             "psychological_matrix": self.cognition.psychology_view(),
             "opponent_model": self.opponent_model,
+            "social_beliefs": self.social_belief.public_view(),
+            "appraisal": self.last_appraisal.public_view() if self.last_appraisal else None,
+            "current_plan": self.plan.public_view(),
+            "activated_traits": self.activated_traits,
+            "decision_mode": self.decision_mode.value,
             "behavior_policy": self.behavior_policy.public_view(),
             "fact_graph": self.fact_graph.public_view(),
             "world_model": self.world_model,
             "memory_depth": len(self.memory),
             "recent_memory": [item.__dict__ for item in list(self.memory)[-3:]],
+            "memory_architecture": self.memory_system.public_view(),
+            "last_retrieval": self.retrieved_memories,
             "context_policy": self.last_context.diagnostics if self.last_context else None,
             "narrative": {
                 "revealed_beats": len(self._revealed_story_titles),
