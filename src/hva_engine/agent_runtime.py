@@ -319,6 +319,13 @@ class AgentBrain:
             mood_valence=self.cognition.morale - self.cognition.frustration,
             limit=4,
         )
+        narrative_affordances = mod.agent_narrative_affordances(
+            state, self.player_id, legal
+        )
+        narrative_context = {
+            **self.narrative_dynamics.public_view(),
+            "legal_action_affordances": narrative_affordances,
+        }
         self.last_context = ContextComposer().compose(
             match_id=self._match_id,
             agent_id=self.player_id,
@@ -341,7 +348,7 @@ class AgentBrain:
             social_beliefs=self.social_belief.public_view(),
             activated_traits=self.activated_traits,
             decision_mode=self.decision_mode.value,
-            narrative_dynamics=self.narrative_dynamics.public_view(),
+            narrative_dynamics=narrative_context,
         )
         baseline_action = mod.agent_action(state, self.player_id, legal, rng)
         learned: dict[str, list[float]] = {}
@@ -350,7 +357,9 @@ class AgentBrain:
         averages = {key: sum(values) / len(values) for key, values in learned.items()}
         averages.update(self.memory_system.procedural_values())
         last_action = self.memory[-1].action if self.memory else None
-        narrative_biases = self.narrative_dynamics.action_biases(legal)
+        narrative_biases = self.narrative_dynamics.action_biases(
+            legal, narrative_affordances
+        )
         combined_identity_biases = {
             action.type: self.identity.action_biases.get(action.type, 0.0)
             + narrative_biases.get(action.type, 0.0)
@@ -413,6 +422,7 @@ class AgentBrain:
                 rng,
             )
         action = legal[choice_index]
+        chosen_narrative_affordance = narrative_affordances.get(action.type, {})
         response_plan = (
             llm_decision.response_plan
             if llm_decision is not None
@@ -506,6 +516,7 @@ class AgentBrain:
             "decision_mode": self.decision_mode.value,
             "narrative_dynamics": self.narrative_dynamics.public_view(),
             "narrative_action_bias": round(narrative_biases.get(action.type, 0.0), 3),
+            "narrative_action_affordance": chosen_narrative_affordance,
             "intention": self.cognition.intention,
             "behavior_policy": self.behavior_policy.public_view(),
             "fact_graph": self.fact_graph.public_view(),
@@ -536,6 +547,12 @@ class AgentBrain:
                     self.narrative_dynamics.active_conflict()["intensity"] > 0.15
                 ),
                 "consequence_hysteresis": bool(self.narrative_dynamics.consequence_trace),
+                "commitment_debt": max(
+                    self.narrative_dynamics.value_debt,
+                    self.narrative_dynamics.relationship_debt,
+                    self.narrative_dynamics.commitment_debt,
+                )
+                > 0.02,
             },
             "predicted_effect": prediction["description"],
             "prediction": prediction,
@@ -693,6 +710,7 @@ class AgentBrain:
             surprise=surprise,
             cognition=self.cognition,
             profile=self.profile,
+            narrative_affordance=trace.get("narrative_action_affordance", {}),
         )
 
     def summary(self) -> dict[str, Any]:

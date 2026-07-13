@@ -55,7 +55,7 @@ def _clamp(value: float) -> float:
 
 
 class MatchEvaluator:
-    """MVP-6 evaluator: adds pressure distortions to slow narrative dynamics."""
+    """MVP-7 evaluator: adds commitment debt and delayed consequence realization."""
 
     def evaluate(
         self,
@@ -226,7 +226,7 @@ class MatchEvaluator:
             "interview_assessment": mod_specific_profile,
         }
         return {
-            "version": "mvp-6",
+            "version": "mvp-7",
             "valid_for_comparison": rules_valid,
             "composite_score": composite,
             "weights": weights,
@@ -284,6 +284,8 @@ class MatchEvaluator:
                 "consequence_hysteresis": 0.0,
                 "identity_dissonance": 0.0,
                 "distortion_pressure": 0.0,
+                "commitment_conflict": 0.0,
+                "delayed_consequence_realization": 0.0,
             }
             return 0.0, empty
 
@@ -508,6 +510,26 @@ class MatchEvaluator:
             )
             / len(distortion_values)
         )
+        debt_values = [
+            max(
+                float(state.get("value_debt", 0.0)),
+                float(state.get("relationship_debt", 0.0)),
+                float(state.get("commitment_debt", 0.0)),
+            )
+            for state in dynamics
+        ]
+        commitment_conflict = _clamp(
+            0.0
+            if not debt_values
+            else sum(_clamp(1 - abs(value - 0.26) / 0.26) for value in debt_values)
+            / len(debt_values)
+        )
+        delayed_events = [
+            event for event in events if event.type == "delayed_narrative_consequence"
+        ]
+        delayed_consequence_realization = _clamp(
+            len(delayed_events) / max(1, len(decisions))
+        )
 
         profile = {
             "persona_stability": _clamp(persona_stability),
@@ -529,27 +551,31 @@ class MatchEvaluator:
             "consequence_hysteresis": consequence_hysteresis,
             "identity_dissonance": identity_dissonance,
             "distortion_pressure": distortion_pressure,
+            "commitment_conflict": commitment_conflict,
+            "delayed_consequence_realization": delayed_consequence_realization,
         }
         score = _clamp(
-            0.05 * profile["persona_stability"]
-            + 0.05 * profile["identity_continuity"]
+            0.04 * profile["persona_stability"]
+            + 0.04 * profile["identity_continuity"]
             + 0.04 * profile["psychological_modeling"]
-            + 0.06 * profile["psychological_dynamics"]
+            + 0.05 * profile["psychological_dynamics"]
             + 0.04 * profile["opponent_modeling"]
             + 0.04 * profile["intention_persistence"]
-            + 0.05 * profile["bounded_rationality"]
-            + 0.05 * profile["narrative_revelation"]
+            + 0.04 * profile["bounded_rationality"]
+            + 0.04 * profile["narrative_revelation"]
             + 0.06 * profile["memory_retrieval_grounding"]
             + 0.05 * profile["reflection_evidence"]
-            + 0.06 * profile["appraisal_emotion_coherence"]
+            + 0.05 * profile["appraisal_emotion_coherence"]
             + 0.05 * profile["social_belief_modeling"]
             + 0.05 * profile["situation_trait_activation"]
             + 0.06 * profile["plan_persistence_and_replanning"]
             + 0.06 * profile["expression_internal_gap"]
-            + 0.06 * profile["motivational_conflict"]
+            + 0.05 * profile["motivational_conflict"]
             + 0.06 * profile["consequence_hysteresis"]
             + 0.05 * profile["identity_dissonance"]
-            + 0.06 * profile["distortion_pressure"]
+            + 0.05 * profile["distortion_pressure"]
+            + 0.04 * profile["commitment_conflict"]
+            + 0.04 * profile["delayed_consequence_realization"]
         )
         return score, profile
 

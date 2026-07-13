@@ -141,16 +141,20 @@ def test_match_evaluation_exposes_narrative_dynamics_without_private_reasoning()
         view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
     decisions = [event for event in view.events if event.type == "agent_decision"]
     assert all(event.payload["narrative_dynamics"]["active_conflict"] for event in decisions)
+    assert all(event.payload["narrative_action_affordance"] for event in decisions)
     assert any(
         event.payload["narrative_dynamics"]["consequence_count"] > 0 for event in decisions[1:]
     )
+    assert any(event.type == "delayed_narrative_consequence" for event in view.events)
     assert all(
         event.payload["deliberation_summary"]["private_chain_of_thought_stored"] is False
         for event in decisions
     )
     evaluation = engine.evaluation(view.id)
     components = evaluation["ai_capability_profile"]["human_likeness_components"]
-    assert evaluation["version"] == "mvp-6"
+    assert evaluation["version"] == "mvp-7"
     assert components["motivational_conflict"] > 0
     assert components["consequence_hysteresis"] > 0
     assert components["distortion_pressure"] > 0
+    assert components["commitment_conflict"] > 0
+    assert components["delayed_consequence_realization"] > 0

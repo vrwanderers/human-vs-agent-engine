@@ -9,6 +9,7 @@
 - 5 个 MVP MOD：`tactical_duel`、`racing_strategy`、`debate_arena`、`crisis_coop`、`adversarial_interview`
 - 论文驱动的 Agent 认知循环：四类记忆、证据反思、情绪评价/再评价、情境人格激活、社会信念、持续计划、快慢有限理性与结果复盘
 - 慢变量人物动力学：竞争动机、关系承诺、秘密压力、身份失调、诱惑、社会施压、自我合理化与行动后果会跨回合改变偏好并推动人物弧光
+- 连续困境与延迟代价：MOD 可为合法动作声明价值、关系、承诺、即时收益与延迟风险；选择会形成可修复但不会自动清零的债务，后续回合再结算后果
 - 独立人物参考校准：用 25 个文学、戏剧、电影/剧本元数据和机构传记关键抉择卡检验机制；虚构与传记分轨，均不冒充真人行为遥测
 - 渐进式角色故事揭露：关键回合、压力、受挫、信任和终局会产生 `story_reveal` 事件
 - 连续混合应对：采访中的七类策略是内部行为坐标，每次回答混合 2–4 类策略及情绪强度，而不是传统 NPC 的固定单选招式
@@ -123,7 +124,7 @@ uvicorn hva_engine.api:app --reload
 
 Docker 开发环境可用 `HVA_FACT_STORE=neo4j docker compose --profile neo4j up --build`。详细约束见 [事实图谱](docs/FACT_GRAPH.md)。
 
-运行评分 MVP-6 的多种子镜像基准（对抗模式会交换双方席位）：
+运行评分 MVP-7 的多种子镜像基准（对抗模式会交换双方席位）：
 
 ```bash
 python -m hva_engine.benchmark --seeds 25

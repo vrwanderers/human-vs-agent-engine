@@ -47,8 +47,13 @@ class NarrativeDynamics:
     impulse_pressure: float = 0.2
     social_susceptibility: float = 0.35
     self_licensing: float = 0.15
+    value_debt: float = 0.0
+    relationship_debt: float = 0.0
+    commitment_debt: float = 0.0
     arc_stage: str = "guarded"
     consequence_trace: list[dict[str, Any]] = field(default_factory=list)
+    pending_consequences: list[dict[str, Any]] = field(default_factory=list)
+    matured_consequence_count: int = 0
 
     @classmethod
     def from_identity(
@@ -130,6 +135,7 @@ class NarrativeDynamics:
         cognition: CognitiveState,
         social_trust: float,
     ) -> None:
+        self._advance_pending_consequences()
         threat = appraisal.social_threat
         incongruence = 1 - appraisal.goal_congruence
         self.motives["self_preservation"].frustration = _clamp(
@@ -175,7 +181,11 @@ class NarrativeDynamics:
         )
         self._update_arc()
 
-    def action_biases(self, legal: list[Action]) -> dict[str, float]:
+    def action_biases(
+        self,
+        legal: list[Action],
+        affordances: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, float]:
         biases: dict[str, float] = {}
         pressures = {name: motive.pressure() for name, motive in self.motives.items()}
         for action in legal:
@@ -217,7 +227,31 @@ class NarrativeDynamics:
                 legacy += 0.10 * self.shame + 0.08 * self.identity_dissonance
             if action.type == "set_boundary":
                 legacy += 0.10 * self.secret_pressure + 0.08 * self.resentment
-            biases[action.type] = motive_fit + legacy + distortion
+            affordance = (affordances or {}).get(action.type, {})
+            commitment_impacts = affordance.get("commitment_impacts", {})
+            commitment_alignment = sum(
+                float(value) for value in commitment_impacts.values()
+            ) / max(1, len(commitment_impacts))
+            identity_alignment = float(affordance.get("identity_alignment", 0.0))
+            relationship_effect = float(affordance.get("relationship_effect", 0.0))
+            immediate_reward = float(affordance.get("immediate_reward", 0.0))
+            delayed_risk = float(affordance.get("delayed_risk", 0.0))
+            repair = float(affordance.get("repair_potential", 0.0))
+            dilemma_bias = (
+                0.10 * commitment_alignment * self.commitments["core_values"]
+                + 0.11 * identity_alignment * self.commitments["core_values"]
+                + 0.09 * relationship_effect * self.attachment
+                + 0.07
+                * immediate_reward
+                * max(self.impulse_pressure, self.self_licensing)
+                - 0.08
+                * delayed_risk
+                * self.motives["self_preservation"].pressure()
+                + 0.08
+                * repair
+                * max(self.value_debt, self.relationship_debt, self.commitment_debt)
+            )
+            biases[action.type] = motive_fit + legacy + distortion + dilemma_bias
         return biases
 
     def record_consequence(
@@ -228,11 +262,38 @@ class NarrativeDynamics:
         surprise: float,
         cognition: CognitiveState,
         profile: CognitiveProfile,
+        narrative_affordance: dict[str, Any] | None = None,
     ) -> None:
         traits = ACTION_TRAITS.get(action_type, {})
         aggressive = traits.get("aggression", 0.0)
         social = traits.get("social", 0.0)
         honest = action_type in {"answer_honestly", "admit_uncertainty", "invoke_memory"}
+        affordance = narrative_affordance or {}
+        commitment_impacts = affordance.get("commitment_impacts", {})
+        commitment_violation = sum(
+            max(0.0, -float(value)) for value in commitment_impacts.values()
+        ) / max(1, len(commitment_impacts))
+        identity_violation = max(0.0, -float(affordance.get("identity_alignment", 0.0)))
+        relationship_cost = max(0.0, -float(affordance.get("relationship_effect", 0.0)))
+        delayed_risk = max(0.0, float(affordance.get("delayed_risk", 0.0)))
+        irreversibility = max(0.0, float(affordance.get("irreversibility", 0.0)))
+        repair = max(0.0, float(affordance.get("repair_potential", 0.0)))
+        self.value_debt = _clamp(
+            0.90 * self.value_debt
+            + 0.24 * identity_violation
+            + 0.12 * irreversibility * identity_violation
+            - 0.20 * repair
+        )
+        self.relationship_debt = _clamp(
+            0.90 * self.relationship_debt
+            + 0.24 * relationship_cost
+            - 0.18 * repair
+        )
+        self.commitment_debt = _clamp(
+            0.90 * self.commitment_debt
+            + 0.26 * commitment_violation
+            - 0.08 * repair
+        )
         value_conflict = aggressive * profile.empathy * max(0.0, -score_delta)
         avoidance = (
             action_type in {"deflect_with_humor", "set_boundary", "conserve"}
@@ -241,8 +302,12 @@ class NarrativeDynamics:
         self.identity_dissonance = _clamp(
             0.84 * self.identity_dissonance
             + 0.24 * value_conflict
+            + 0.20 * identity_violation
+            + 0.12 * commitment_violation
+            + 0.08 * irreversibility * max(identity_violation, commitment_violation)
             + (0.09 if avoidance else 0.0)
             - (0.12 if honest else 0.0)
+            - 0.16 * repair
         )
         self.moral_injury = _clamp(
             0.92 * self.moral_injury + 0.18 * value_conflict + 0.08 * surprise * aggressive
@@ -271,6 +336,18 @@ class NarrativeDynamics:
             + 0.08 * max(0.0, -score_delta)
             - 0.06 * max(0.0, score_delta)
         )
+        if delayed_risk > 0.15:
+            self.pending_consequences.append(
+                {
+                    "source_action": action_type,
+                    "due_after": 2,
+                    "risk": round(delayed_risk, 3),
+                    "value_cost": round(identity_violation, 3),
+                    "relationship_cost": round(relationship_cost, 3),
+                    "commitment_cost": round(commitment_violation, 3),
+                }
+            )
+            self.pending_consequences = self.pending_consequences[-8:]
         for motive in self.motives.values():
             motive.satisfaction = _clamp(
                 0.86 * motive.satisfaction + 0.14 * (0.5 + max(-0.5, min(0.5, score_delta)))
@@ -286,10 +363,46 @@ class NarrativeDynamics:
                 "hope": round(self.hope, 3),
                 "impulse_pressure": round(self.impulse_pressure, 3),
                 "self_licensing": round(self.self_licensing, 3),
+                "value_debt": round(self.value_debt, 3),
+                "relationship_debt": round(self.relationship_debt, 3),
+                "commitment_debt": round(self.commitment_debt, 3),
             }
         )
         self.consequence_trace = self.consequence_trace[-16:]
         self._update_arc()
+
+    def _advance_pending_consequences(self) -> None:
+        remaining: list[dict[str, Any]] = []
+        for item in self.pending_consequences:
+            advanced = {**item, "due_after": int(item["due_after"]) - 1}
+            if advanced["due_after"] > 0:
+                remaining.append(advanced)
+                continue
+            risk = float(advanced["risk"])
+            value_cost = float(advanced["value_cost"])
+            relationship_cost = float(advanced["relationship_cost"])
+            commitment_cost = float(advanced["commitment_cost"])
+            self.identity_dissonance = _clamp(
+                self.identity_dissonance
+                + 0.16 * risk * max(value_cost, commitment_cost)
+            )
+            self.shame = _clamp(self.shame + 0.10 * risk * value_cost)
+            self.resentment = _clamp(
+                self.resentment + 0.10 * risk * relationship_cost
+            )
+            self.matured_consequence_count += 1
+            self.consequence_trace.append(
+                {
+                    "action": advanced["source_action"],
+                    "event": "delayed_consequence_matured",
+                    "risk": round(risk, 3),
+                    "dissonance": round(self.identity_dissonance, 3),
+                    "shame": round(self.shame, 3),
+                    "resentment": round(self.resentment, 3),
+                }
+            )
+        self.pending_consequences = remaining
+        self.consequence_trace = self.consequence_trace[-16:]
 
     def active_conflict(self) -> dict[str, Any]:
         approach_names = {"truth", "autonomy", "status", "duty", "redemption", "care"}
@@ -334,6 +447,11 @@ class NarrativeDynamics:
             "impulse_pressure": round(self.impulse_pressure, 3),
             "social_susceptibility": round(self.social_susceptibility, 3),
             "self_licensing": round(self.self_licensing, 3),
+            "value_debt": round(self.value_debt, 3),
+            "relationship_debt": round(self.relationship_debt, 3),
+            "commitment_debt": round(self.commitment_debt, 3),
+            "pending_consequence_count": len(self.pending_consequences),
+            "matured_consequence_count": self.matured_consequence_count,
             "arc_stage": self.arc_stage,
             "consequence_count": len(self.consequence_trace),
         }

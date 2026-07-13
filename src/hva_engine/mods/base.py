@@ -50,6 +50,12 @@ class GameMod(ABC):
         """Optional bounded adjustments applied to the Agent psychological matrix."""
         return {}
 
+    def agent_narrative_affordances(
+        self, state: dict[str, Any], actor_id: str, legal: list[Action]
+    ) -> dict[str, dict[str, Any]]:
+        """Optional value, relationship, and delayed-cost metadata for legal actions."""
+        return {}
+
     def manifest(self) -> dict[str, Any]:
         return {
             "id": self.id,

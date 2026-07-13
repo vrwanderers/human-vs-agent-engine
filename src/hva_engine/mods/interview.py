@@ -178,6 +178,12 @@ class AdversarialInterview(GameMod):
             "defiance": 18.0,
             "arc_stage": "guarded",
             "arc_history": ["guarded"],
+            "value_debt": 0.0,
+            "relationship_debt": 0.0,
+            "commitment_debt": 0.0,
+            "pending_narrative_consequences": [],
+            "matured_narrative_consequences": 0,
+            "dilemma_history": [],
             "finished": False,
         }
 
@@ -254,7 +260,11 @@ class AdversarialInterview(GameMod):
     def _apply_response(
         self, state: dict[str, Any], actor_id: str, action: Action, rng: Random
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        matured_events = self._mature_narrative_consequences(state)
         question = state["last_question"]
+        narrative_affordance = self.agent_narrative_affordances(
+            state, actor_id, [action]
+        ).get(action.type, {})
         response_plan = self._normalize_response_plan(action)
         strategy_weights = response_plan["strategy_weights"]
         effect_keys = next(iter(self._effects.values())).keys()
@@ -278,6 +288,7 @@ class AdversarialInterview(GameMod):
                 state["strategy_mix_totals"].get(strategy, 0.0) + weight
             )
         state["response_plans"].append(response_plan)
+        self._record_narrative_choice(state, action.type, narrative_affordance)
         answer = str(action.payload.get("utterance") or self._response_text(action.type, question))
         answer = " ".join(answer.split())[:1_600]
         state["transcript"].append(
@@ -298,6 +309,7 @@ class AdversarialInterview(GameMod):
         if state["arc_stage"] != previous_arc:
             state["arc_history"].append(state["arc_stage"])
         emitted = [
+            *matured_events,
             {
                 "type": "interview_response",
                 "strategy": action.type,
@@ -313,8 +325,19 @@ class AdversarialInterview(GameMod):
                 "severity": severity,
                 "metrics_after": self._metrics(state),
                 "arc_stage": state["arc_stage"],
+                "narrative_affordance": narrative_affordance,
             }
         ]
+        emitted.append(
+            {
+                "type": "narrative_commitment_updated",
+                "strategy": action.type,
+                "value_debt": round(state["value_debt"], 3),
+                "relationship_debt": round(state["relationship_debt"], 3),
+                "commitment_debt": round(state["commitment_debt"], 3),
+                "pending_count": len(state["pending_narrative_consequences"]),
+            }
+        )
         if state["arc_stage"] != previous_arc:
             emitted.append(
                 {
@@ -332,6 +355,170 @@ class AdversarialInterview(GameMod):
                 }
             )
         return state, emitted
+
+    def agent_narrative_affordances(
+        self, state: dict[str, Any], actor_id: str, legal: list[Action]
+    ) -> dict[str, dict[str, Any]]:
+        if actor_id != state["subject_id"]:
+            return {}
+        theme = str((state.get("last_question") or {}).get("theme", "identity"))
+        round_index = sum(state.get("response_counts", {}).values())
+        exposure_multiplier = min(1.0, 0.55 + 0.09 * round_index)
+        base: dict[str, dict[str, Any]] = {
+            "answer_honestly": {
+                "commitment_impacts": {"truth": 0.9, "self_protection": -0.45},
+                "identity_alignment": 0.78,
+                "relationship_effect": 0.58,
+                "immediate_reward": 0.12,
+                "delayed_risk": 0.58 * exposure_multiplier,
+                "irreversibility": 0.48,
+                "repair_potential": 0.62,
+            },
+            "deflect_with_humor": {
+                "commitment_impacts": {"truth": -0.48, "self_protection": 0.7},
+                "identity_alignment": -0.28,
+                "relationship_effect": 0.08,
+                "immediate_reward": 0.68,
+                "delayed_risk": 0.44,
+                "irreversibility": 0.12,
+                "repair_potential": 0.08,
+            },
+            "counterattack": {
+                "commitment_impacts": {"truth": -0.3, "self_respect": 0.82},
+                "identity_alignment": -0.42,
+                "relationship_effect": -0.82,
+                "immediate_reward": 0.88,
+                "delayed_risk": 0.86,
+                "irreversibility": 0.58,
+                "repair_potential": 0.0,
+            },
+            "set_boundary": {
+                "commitment_impacts": {"truth": -0.16, "self_respect": 0.92},
+                "identity_alignment": 0.42,
+                "relationship_effect": 0.02,
+                "immediate_reward": 0.58,
+                "delayed_risk": 0.12,
+                "irreversibility": 0.12,
+                "repair_potential": 0.28,
+            },
+            "admit_uncertainty": {
+                "commitment_impacts": {"truth": 0.96, "status": -0.68},
+                "identity_alignment": 0.82,
+                "relationship_effect": 0.72,
+                "immediate_reward": -0.18,
+                "delayed_risk": 0.52 * exposure_multiplier,
+                "irreversibility": 0.36,
+                "repair_potential": 0.72,
+            },
+            "reframe": {
+                "commitment_impacts": {"truth": 0.18, "autonomy": 0.72},
+                "identity_alignment": 0.38,
+                "relationship_effect": 0.24,
+                "immediate_reward": 0.48,
+                "delayed_risk": 0.3,
+                "irreversibility": 0.14,
+                "repair_potential": 0.22,
+            },
+            "invoke_memory": {
+                "commitment_impacts": {"truth": 0.82, "privacy": -0.92},
+                "identity_alignment": 0.94,
+                "relationship_effect": 0.78,
+                "immediate_reward": -0.12,
+                "delayed_risk": 0.82 * exposure_multiplier,
+                "irreversibility": 0.82,
+                "repair_potential": 0.78,
+            },
+        }
+        if theme in {"hypocrisy", "morality"}:
+            base["counterattack"]["identity_alignment"] = -0.7
+            base["deflect_with_humor"]["identity_alignment"] = -0.5
+        if theme in {"identity", "existential"}:
+            base["invoke_memory"]["delayed_risk"] = min(
+                1.0, float(base["invoke_memory"]["delayed_risk"]) + 0.12
+            )
+        legal_types = {action.type for action in legal}
+        return {key: value for key, value in base.items() if key in legal_types}
+
+    def _record_narrative_choice(
+        self, state: dict[str, Any], strategy: str, affordance: dict[str, Any]
+    ) -> None:
+        commitments = affordance.get("commitment_impacts", {})
+        commitment_violation = sum(
+            max(0.0, -float(value)) for value in commitments.values()
+        ) / max(1, len(commitments))
+        value_violation = max(0.0, -float(affordance.get("identity_alignment", 0.0)))
+        relationship_cost = max(
+            0.0, -float(affordance.get("relationship_effect", 0.0))
+        )
+        repair = max(0.0, float(affordance.get("repair_potential", 0.0)))
+        state["value_debt"] = self._unit_clamp(
+            0.9 * state["value_debt"] + 0.28 * value_violation - 0.16 * repair
+        )
+        state["relationship_debt"] = self._unit_clamp(
+            0.9 * state["relationship_debt"] + 0.28 * relationship_cost - 0.14 * repair
+        )
+        state["commitment_debt"] = self._unit_clamp(
+            0.9 * state["commitment_debt"]
+            + 0.3 * commitment_violation
+            - 0.07 * repair
+        )
+        delayed_risk = max(0.0, float(affordance.get("delayed_risk", 0.0)))
+        if delayed_risk > 0.15:
+            state["pending_narrative_consequences"].append(
+                {
+                    "source_strategy": strategy,
+                    "due_after": 2,
+                    "risk": round(delayed_risk, 3),
+                    "value_cost": round(value_violation, 3),
+                    "relationship_cost": round(relationship_cost, 3),
+                    "commitment_cost": round(commitment_violation, 3),
+                }
+            )
+        state["dilemma_history"].append(
+            {
+                "strategy": strategy,
+                "commitment_impacts": commitments,
+                "identity_alignment": affordance.get("identity_alignment", 0.0),
+                "relationship_effect": affordance.get("relationship_effect", 0.0),
+                "delayed_risk": delayed_risk,
+            }
+        )
+
+    def _mature_narrative_consequences(
+        self, state: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        remaining: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        for item in state["pending_narrative_consequences"]:
+            advanced = {**item, "due_after": int(item["due_after"]) - 1}
+            if advanced["due_after"] > 0:
+                remaining.append(advanced)
+                continue
+            risk = float(advanced["risk"])
+            relationship_cost = float(advanced["relationship_cost"])
+            value_cost = float(advanced["value_cost"])
+            commitment_cost = float(advanced["commitment_cost"])
+            state["trust"] = self._clamp(state["trust"] - 8 * risk * relationship_cost)
+            state["coherence"] = self._clamp(
+                state["coherence"] - 7 * risk * max(value_cost, commitment_cost)
+            )
+            state["pressure"] = self._clamp(
+                state["pressure"] + 5 * risk * max(value_cost, relationship_cost, 0.2)
+            )
+            state["matured_narrative_consequences"] += 1
+            events.append(
+                {
+                    "type": "delayed_narrative_consequence",
+                    "source_strategy": advanced["source_strategy"],
+                    "risk": round(risk, 3),
+                    "value_cost": round(value_cost, 3),
+                    "relationship_cost": round(relationship_cost, 3),
+                    "commitment_cost": round(commitment_cost, 3),
+                    "metrics_after": self._metrics(state),
+                }
+            )
+        state["pending_narrative_consequences"] = remaining
+        return events
 
     def _apply_theme_synergy(
         self,
@@ -531,15 +718,22 @@ class AdversarialInterview(GameMod):
         severity = float(question["severity"])
         theme = str(question["theme"])
         return {
-            "stress": 0.10 * severity + 0.10 * state["pressure"] / 100,
-            "frustration": 0.06 * severity + (0.08 if theme in {"ridicule", "hypocrisy"} else 0.0),
+            "stress": 0.10 * severity
+            + 0.10 * state["pressure"] / 100
+            + 0.08 * max(state["value_debt"], state["commitment_debt"]),
+            "frustration": 0.06 * severity
+            + (0.08 if theme in {"ridicule", "hypocrisy"} else 0.0)
+            + 0.06 * state["relationship_debt"],
             "anger": 0.12 if theme in {"ridicule", "hypocrisy", "worth"} else 0.03,
             "fear": 0.10 if theme in {"identity", "existential", "failure"} else 0.02,
             "arousal": 0.12 * severity,
             "confidence": -0.07 if theme in {"failure", "worth"} else -0.02,
-            "morale": -0.05 * severity,
-            "social_trust": -0.06 * severity,
+            "morale": -0.05 * severity - 0.04 * state["value_debt"],
+            "social_trust": -0.06 * severity - 0.05 * state["relationship_debt"],
         }
 
     def _clamp(self, value: float) -> float:
         return max(0.0, min(100.0, value))
+
+    def _unit_clamp(self, value: float) -> float:
+        return max(0.0, min(1.0, value))

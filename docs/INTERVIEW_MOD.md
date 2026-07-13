@@ -35,6 +35,12 @@ MOD 状态记录 `pressure / composure / authenticity / trust / coherence / vuln
 
 这两层用途不同：MOD 状态用于剧情规则和跨对局评分；通用心理矩阵用于人格化决策、上下文和跨 MOD 比较。
 
+## 连续困境与延迟代价
+
+MVP-7 为七类合法策略声明同一套叙事可供性：`commitment_impacts / identity_alignment / relationship_effect / immediate_reward / delayed_risk / repair_potential / irreversibility`。例如，引用私人记忆可能同时维护真实感、增进关系并伤害隐私承诺；反击能立刻夺回尊严，却可能在两轮后以信任或一致性损失成熟。
+
+每次回答会更新三本独立账簿：价值债务、关系债务与承诺债务。修复行为只能渐减旧债，不能让一次自我解释立即清零；高风险选择进入 `pending_narrative_consequences`，到期时产生 `delayed_narrative_consequence` 事件并再次影响心理、关系与后续效用。这样六轮采访构成相互依赖的困境链，而不是六道互不相干的问答题。
+
 ## 人物弧光
 
 角色从 `guarded` 开始，根据累积行为进入：
@@ -52,4 +58,4 @@ MOD 状态记录 `pressure / composure / authenticity / trust / coherence / vuln
 
 MOD 专用综合分不奖励“永远冷静”或“每轮暴怒”。心理反应的目标是受问题驱动、幅度适中且与人格连续。重复同一种防御、始终单策略回答、无差别混满所有策略、没有身份解释、无事实溯源或停在 guarded 状态都会显著扣分。
 
-25 种子基线中应重点观察：规则合法率、人物弧光分布、心理反应分布、回答策略多样性、事实提案拒绝率，以及真人是否认为变化“意外但合理”。
+25 种子基线中应重点观察：规则合法率、人物弧光分布、心理反应分布、回答策略多样性、承诺冲突、延迟后果实现、事实提案拒绝率，以及真人是否认为变化“意外但合理”。
