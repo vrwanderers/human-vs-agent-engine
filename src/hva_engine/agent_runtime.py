@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import deque
 from dataclasses import dataclass, field
 from random import Random
@@ -264,6 +265,11 @@ class AgentBrain:
         else:
             choice_index = bounded_choice(utilities, self.behavior_policy.realism, rng)
         action = legal[choice_index]
+        response_plan = (
+            llm_decision.response_plan
+            if llm_decision is not None
+            else self._baseline_response_plan(mod, legal, utilities, choice_index)
+        )
         best_index = max(range(len(utilities)), key=utilities.__getitem__)
         regret = max(0.0, utilities[best_index] - utilities[choice_index])
         memory_used = len(self.memory) >= 2
@@ -300,6 +306,7 @@ class AgentBrain:
             if llm_decision and llm_decision.reason
             else default_rationale,
             "utterance": llm_decision.utterance if llm_decision else None,
+            "response_plan": response_plan,
             "llm": (
                 {
                     "provider": decision_client.provider.name,
@@ -377,6 +384,72 @@ class AgentBrain:
                 )
         return {"submitted": len(proposals), "accepted": accepted, "rejected": rejected}
 
+    def _baseline_response_plan(
+        self,
+        mod: GameMod,
+        legal: list[Action],
+        utilities: list[float],
+        choice_index: int,
+    ) -> dict[str, Any]:
+        primary = legal[choice_index].type
+        if mod.id != "adversarial_interview":
+            return {
+                "primary_strategy": primary,
+                "strategy_weights": {primary: 1.0},
+                "intensity": round(self.cognition.arousal, 3),
+                "emotional_display": "controlled",
+                "stance_tags": [self.cognition.intention],
+                "reveal_fact_ids": [],
+            }
+        blend_size = 2
+        if self.cognition.stress >= 0.45 and self.cognition.uncertainty >= 0.42:
+            blend_size += 1
+        if self.cognition.arousal >= 0.78 and self.cognition.frustration >= 0.55:
+            blend_size += 1
+        top_indices = sorted(range(len(utilities)), key=utilities.__getitem__, reverse=True)[
+            :blend_size
+        ]
+        if choice_index not in top_indices:
+            top_indices[-1] = choice_index
+        peak = max(utilities[index] for index in top_indices)
+        raw_weights = {
+            legal[index].type: math.exp((utilities[index] - peak) / 0.32) for index in top_indices
+        }
+        raw_weights[primary] = max(raw_weights.get(primary, 0.0), 0.35)
+        total = sum(raw_weights.values())
+        weights = {key: round(value / total, 4) for key, value in raw_weights.items()}
+        if self.cognition.anger >= 0.55:
+            emotional_display = "controlled_anger"
+        elif self.cognition.fear >= 0.55:
+            emotional_display = "guarded_anxiety"
+        elif self.cognition.stress >= 0.6:
+            emotional_display = "strained_composure"
+        elif self.cognition.morale >= 0.68:
+            emotional_display = "quiet_confidence"
+        else:
+            emotional_display = "measured_tension"
+        reveal_fact_ids: list[str] = []
+        if weights.get("invoke_memory", 0.0) >= 0.2 and self.decisions >= 1:
+            for memory in self.identity.formative_memories:
+                if memory.title not in self._revealed_story_titles:
+                    reveal_fact_ids.append(self.fact_graph.formative_memory_fact_ids[memory.title])
+                    break
+        intensity = min(
+            1.0,
+            0.25
+            + 0.30 * self.cognition.arousal
+            + 0.25 * self.cognition.stress
+            + 0.20 * max(self.cognition.anger, self.cognition.fear),
+        )
+        return {
+            "primary_strategy": primary,
+            "strategy_weights": weights,
+            "intensity": round(intensity, 3),
+            "emotional_display": emotional_display,
+            "stance_tags": [self.cognition.intention, self.profile.archetype],
+            "reveal_fact_ids": reveal_fact_ids,
+        }
+
     def remember(
         self,
         turn: int,
@@ -431,7 +504,11 @@ class AgentBrain:
             },
         }
 
-    def maybe_reveal_story(self, terminal: bool = False) -> dict[str, Any] | None:
+    def maybe_reveal_story(
+        self,
+        terminal: bool = False,
+        requested_fact_ids: list[str] | None = None,
+    ) -> dict[str, Any] | None:
         memories = {memory.title: memory for memory in self.identity.formative_memories}
         thresholds = (
             (
@@ -454,7 +531,22 @@ class AgentBrain:
                 "commitment_or_finale",
             ),
         )
-        for title, eligible, trigger in thresholds:
+        fact_id_to_title = {
+            fact_id: title for title, fact_id in self.fact_graph.formative_memory_fact_ids.items()
+        }
+        requested_titles = [
+            fact_id_to_title[fact_id]
+            for fact_id in requested_fact_ids or []
+            if fact_id in fact_id_to_title
+        ]
+        ordered = list(thresholds)
+        for title in reversed(requested_titles):
+            for candidate in thresholds:
+                if candidate[0] == title and candidate[1]:
+                    ordered.remove(candidate)
+                    ordered.insert(0, (title, True, "agent_requested_reveal"))
+                    break
+        for title, eligible, trigger in ordered:
             if not eligible or title in self._revealed_story_titles:
                 continue
             memory = memories[title]

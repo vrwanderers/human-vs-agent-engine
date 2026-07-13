@@ -39,6 +39,18 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
   "action_index": 0,
   "reason": "brief observable summary",
   "utterance": "public in-character answer",
+  "response_plan": {
+    "strategy_weights": {
+      "answer_honestly": 0.4,
+      "set_boundary": 0.25,
+      "counterattack": 0.2,
+      "deflect_with_humor": 0.15
+    },
+    "intensity": 0.72,
+    "emotional_display": "controlled_anger",
+    "stance_tags": ["direct", "wounded"],
+    "reveal_fact_ids": ["fact-0008"]
+  },
   "fact_proposals": [
     {
       "subject": "self",
@@ -49,6 +61,8 @@ Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接
   ]
 }
 ```
+
+`action_index` 仍是规则校验用的主要策略；`strategy_weights` 只能引用当前合法动作，最多保留四种并归一化。揭露请求也不是直接写权限，只有满足剧情节奏且指向既有形成性记忆时才会产生公开 `story_reveal`。
 
 ## 提示词分层
 

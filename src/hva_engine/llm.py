@@ -36,6 +36,7 @@ class LLMDecisionResult:
     action_index: int
     reason: str
     utterance: str | None
+    response_plan: dict[str, Any]
     fact_proposals: list[dict[str, Any]]
     response: LLMResponse
 
@@ -230,7 +231,55 @@ class LLMDecisionClient:
         reason = str(choice.get("reason", ""))[:500]
         utterance_value = choice.get("utterance")
         utterance = str(utterance_value).strip()[:1_600] if utterance_value else None
-        return LLMDecisionResult(index, reason, utterance, proposals, response)
+        response_plan = self._parse_response_plan(choice.get("response_plan"), index, legal_actions)
+        return LLMDecisionResult(index, reason, utterance, response_plan, proposals, response)
+
+    def _parse_response_plan(
+        self,
+        raw_plan: Any,
+        action_index: int,
+        legal_actions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        legal_types = [str(action.get("type")) for action in legal_actions]
+        primary = legal_types[action_index]
+        plan = raw_plan if isinstance(raw_plan, dict) else {}
+        raw_weights = plan.get("strategy_weights", {})
+        weights: dict[str, float] = {}
+        if isinstance(raw_weights, dict):
+            for strategy, raw_value in raw_weights.items():
+                if strategy not in legal_types:
+                    raise ValueError(f"Response plan contains illegal strategy: {strategy}")
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Response plan weights must be numeric") from exc
+                if value > 0:
+                    weights[strategy] = min(1.0, value)
+        if not weights:
+            weights = {primary: 1.0}
+        if primary not in weights:
+            weights[primary] = max(0.15, min(weights.values()))
+        weights = dict(sorted(weights.items(), key=lambda item: item[1], reverse=True)[:4])
+        total = sum(weights.values())
+        normalized = {key: round(value / total, 4) for key, value in weights.items()}
+        intensity = max(0.0, min(1.0, float(plan.get("intensity", 0.6))))
+        emotional_display = str(plan.get("emotional_display", "controlled"))[:64]
+        raw_tags = plan.get("stance_tags", [])
+        stance_tags = (
+            [str(value)[:40] for value in raw_tags[:4]] if isinstance(raw_tags, list) else []
+        )
+        raw_reveals = plan.get("reveal_fact_ids", [])
+        reveal_fact_ids = (
+            [str(value)[:80] for value in raw_reveals[:3]] if isinstance(raw_reveals, list) else []
+        )
+        return {
+            "primary_strategy": primary,
+            "strategy_weights": normalized,
+            "intensity": round(intensity, 3),
+            "emotional_display": emotional_display,
+            "stance_tags": stance_tags,
+            "reveal_fact_ids": reveal_fact_ids,
+        }
 
     def _extract_json(self, content: str) -> str:
         text = content.strip()

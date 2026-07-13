@@ -129,13 +129,17 @@ class ContextComposer:
         )
         deliberation = (
             "Balance goals, identity, persona, psychology, memory, uncertainty, and opponent "
-            "behavior. Bounded rationality is allowed, but do not invent facts or actions. "
-            "Keep private reasoning private."
+            "behavior. For social responses, blend two to four legal strategies instead of acting "
+            "like a single rigid tactic. Bounded rationality is allowed, but do not invent facts "
+            "or actions. Keep private reasoning private."
         )
         output_contract = (
             '\nReturn JSON only: {"action_index": <integer>, '
             '"reason": "brief observable summary", '
             '"utterance": "optional in-character public response, never private reasoning", '
+            '"response_plan": {"strategy_weights": {"legal_action_type": 0.0}, '
+            '"intensity": 0.0, "emotional_display": "...", '
+            '"stance_tags": ["..."], "reveal_fact_ids": ["fact-..."]}, '
             '"fact_proposals": [{"subject": "...", "predicate": "...", "object": {}, '
             '"basis_fact_ids": ["fact-..."]}]}'
         )

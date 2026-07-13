@@ -9,6 +9,7 @@
 - 5 个 MVP MOD：`tactical_duel`、`racing_strategy`、`debate_arena`、`crisis_coop`、`adversarial_interview`
 - 人类化 Agent 认知循环：稳定人格、自传身份、心理矩阵、有限理性、对手模型、意图持续与结果复盘
 - 渐进式角色故事揭露：关键回合、压力、受挫、信任和终局会产生 `story_reveal` 事件
+- 连续混合应对：采访中的七类策略是内部行为坐标，每次回答混合 2–4 类策略及情绪强度，而不是传统 NPC 的固定单选招式
 - 受约束的事实图谱：核心身世不可覆盖，自由发挥必须引用事实依据，可变事实保留修订链
 - 可选 Neo4j 持久化，存储 Agent、事实、揭露状态和 `SUPERSEDES` 关系
 - Agent 私有上下文隔离、分层提示、确定性记忆压缩与协作共享黑板

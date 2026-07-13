@@ -62,6 +62,7 @@ def run_real_interview(
                 "source": event.payload.get("decision_source"),
                 "reason": event.payload.get("rationale"),
                 "utterance": event.payload.get("utterance"),
+                "response_plan": event.payload.get("response_plan"),
                 "model": llm.get("model"),
                 "usage": llm.get("usage", {}),
                 "fact_proposals": llm.get("fact_proposals"),

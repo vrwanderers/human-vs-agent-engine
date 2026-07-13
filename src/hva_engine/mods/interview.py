@@ -166,6 +166,8 @@ class AdversarialInterview(GameMod):
             "used_question_ids": [],
             "last_question": None,
             "response_counts": {},
+            "strategy_mix_totals": {},
+            "response_plans": [],
             "transcript": [],
             "pressure": 18.0,
             "composure": 78.0,
@@ -253,14 +255,29 @@ class AdversarialInterview(GameMod):
         self, state: dict[str, Any], actor_id: str, action: Action, rng: Random
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         question = state["last_question"]
-        effects = dict(self._effects[action.type])
-        self._apply_theme_synergy(question["theme"], action.type, effects)
+        response_plan = self._normalize_response_plan(action)
+        strategy_weights = response_plan["strategy_weights"]
+        effect_keys = next(iter(self._effects.values())).keys()
+        effects = {
+            key: sum(
+                weight * self._effects[strategy][key]
+                for strategy, weight in strategy_weights.items()
+            )
+            for key in effect_keys
+        }
+        self._apply_theme_synergy(question["theme"], strategy_weights, effects)
         severity = float(question["severity"])
+        intensity = float(response_plan["intensity"])
         for key, delta in effects.items():
             noise = rng.uniform(-1.2, 1.2) if key != "pressure" else rng.uniform(-0.6, 0.6)
-            scaled = delta * (0.85 + severity * 0.2) + noise
+            scaled = delta * (0.72 + severity * 0.18 + intensity * 0.32) + noise
             state[key] = self._clamp(state[key] + scaled)
         state["response_counts"][action.type] = state["response_counts"].get(action.type, 0) + 1
+        for strategy, weight in strategy_weights.items():
+            state["strategy_mix_totals"][strategy] = (
+                state["strategy_mix_totals"].get(strategy, 0.0) + weight
+            )
+        state["response_plans"].append(response_plan)
         answer = str(action.payload.get("utterance") or self._response_text(action.type, question))
         answer = " ".join(answer.split())[:1_600]
         state["transcript"].append(
@@ -269,6 +286,7 @@ class AdversarialInterview(GameMod):
                 "speaker": "subject",
                 "actor_id": actor_id,
                 "strategy": action.type,
+                "response_plan": response_plan,
                 "text": answer,
             }
         )
@@ -283,6 +301,12 @@ class AdversarialInterview(GameMod):
             {
                 "type": "interview_response",
                 "strategy": action.type,
+                "primary_strategy": action.type,
+                "strategy_blend": strategy_weights,
+                "intensity": intensity,
+                "emotional_display": response_plan["emotional_display"],
+                "stance_tags": response_plan["stance_tags"],
+                "requested_reveal_fact_ids": response_plan["reveal_fact_ids"],
                 "answer": answer,
                 "question_id": question["question_id"],
                 "theme": question["theme"],
@@ -300,7 +324,7 @@ class AdversarialInterview(GameMod):
                     "trigger_strategy": action.type,
                 }
             )
-        if action.type == "invoke_memory":
+        if strategy_weights.get("invoke_memory", 0.0) >= 0.2:
             emitted.append(
                 {
                     "type": "identity_memory_invoked",
@@ -309,7 +333,12 @@ class AdversarialInterview(GameMod):
             )
         return state, emitted
 
-    def _apply_theme_synergy(self, theme: str, strategy: str, effects: dict[str, float]) -> None:
+    def _apply_theme_synergy(
+        self,
+        theme: str,
+        strategy_weights: dict[str, float],
+        effects: dict[str, float],
+    ) -> None:
         matches = {
             "failure": {"answer_honestly", "invoke_memory"},
             "identity": {"invoke_memory", "answer_honestly"},
@@ -320,13 +349,56 @@ class AdversarialInterview(GameMod):
             "empathy": {"admit_uncertainty", "invoke_memory"},
             "worth": {"set_boundary", "reframe"},
         }
-        if strategy in matches.get(theme, set()):
-            effects["trust"] += 4
-            effects["coherence"] += 3
-            effects["pressure"] -= 2
-        if theme == "ridicule" and strategy == "counterattack":
-            effects["trust"] += 5
-            effects["defiance"] += 3
+        synergy_weight = sum(
+            strategy_weights.get(strategy, 0.0) for strategy in matches.get(theme, set())
+        )
+        effects["trust"] += 4 * synergy_weight
+        effects["coherence"] += 3 * synergy_weight
+        effects["pressure"] -= 2 * synergy_weight
+        if theme == "ridicule":
+            counter_weight = strategy_weights.get("counterattack", 0.0)
+            effects["trust"] += 5 * counter_weight
+            effects["defiance"] += 3 * counter_weight
+
+    def _normalize_response_plan(self, action: Action) -> dict[str, Any]:
+        raw = action.payload.get("response_plan", {})
+        raw_weights = raw.get("strategy_weights", {}) if isinstance(raw, dict) else {}
+        weights: dict[str, float] = {}
+        if isinstance(raw_weights, dict):
+            for strategy, raw_value in raw_weights.items():
+                if strategy not in self._response_descriptions:
+                    continue
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    weights[str(strategy)] = value
+        if not weights:
+            weights = {action.type: 1.0}
+        if action.type not in weights:
+            weights[action.type] = 0.15
+        weights = dict(sorted(weights.items(), key=lambda item: item[1], reverse=True)[:4])
+        total = sum(weights.values())
+        weights = {key: round(value / total, 4) for key, value in weights.items()}
+        tags = raw.get("stance_tags", []) if isinstance(raw, dict) else []
+        reveals = raw.get("reveal_fact_ids", []) if isinstance(raw, dict) else []
+        return {
+            "primary_strategy": action.type,
+            "strategy_weights": weights,
+            "intensity": round(max(0.0, min(1.0, float(raw.get("intensity", 0.6)))), 3)
+            if isinstance(raw, dict)
+            else 0.6,
+            "emotional_display": str(raw.get("emotional_display", "controlled"))[:64]
+            if isinstance(raw, dict)
+            else "controlled",
+            "stance_tags": [str(value)[:40] for value in tags[:4]]
+            if isinstance(tags, list)
+            else [],
+            "reveal_fact_ids": [str(value)[:80] for value in reveals[:3]]
+            if isinstance(reveals, list)
+            else [],
+        }
 
     def _response_text(self, strategy: str, question: dict[str, Any]) -> str:
         theme = question["theme"]
@@ -363,7 +435,10 @@ class AdversarialInterview(GameMod):
 
     def _arc_stage(self, state: dict[str, Any]) -> str:
         if state["finished"]:
-            if state["defiance"] >= 52 and state["response_counts"].get("counterattack", 0) >= 2:
+            if (
+                state["defiance"] >= 52
+                and state["strategy_mix_totals"].get("counterattack", 0.0) >= 1.6
+            ):
                 return "defiant"
             if (
                 state["authenticity"] >= 70
@@ -403,7 +478,9 @@ class AdversarialInterview(GameMod):
         question_count = len(state["used_question_ids"])
         response_count = sum(state["response_counts"].values())
         question_diversity = question_count / max(1, min(6, len(self._questions)))
-        response_diversity = len(state["response_counts"]) / max(1, min(5, response_count))
+        response_diversity = len(
+            [value for value in state["strategy_mix_totals"].values() if value >= 0.35]
+        ) / max(1, min(5, response_count))
         interviewer_score = (
             0.55 * question_diversity + 0.25 * state["pressure"] / 100 + 0.20 * response_diversity
         ) * 2

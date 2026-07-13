@@ -76,6 +76,19 @@ class FakeProvider:
         return LLMResponse('{"action_index": 1}', "fake-1", {}, {})
 
 
+class InvalidPlanProvider:
+    name = "invalid-plan"
+
+    async def complete(self, _request):
+        return LLMResponse(
+            '{"action_index":0,"response_plan":'
+            '{"strategy_weights":{"invented_illegal_strategy":1}}}',
+            "fake-2",
+            {},
+            {},
+        )
+
+
 def test_provider_registry_and_llm_decision_are_rule_constrained() -> None:
     registry = ProviderRegistry()
     registry.register(FakeProvider())
@@ -90,3 +103,14 @@ def test_provider_registry_and_llm_decision_are_rule_constrained() -> None:
     assert response.model == "fake-1"
     with pytest.raises(ValueError, match="already registered"):
         registry.register(FakeProvider())
+
+
+def test_llm_response_plan_rejects_strategies_outside_legal_actions() -> None:
+    client = LLMDecisionClient(InvalidPlanProvider())
+    with pytest.raises(ValueError, match="illegal strategy"):
+        asyncio.run(
+            client.choose_action_and_facts(
+                [LLMMessage("user", "choose")],
+                [{"type": "answer_honestly"}, {"type": "set_boundary"}],
+            )
+        )

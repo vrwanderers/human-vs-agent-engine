@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import Counter
 from typing import Any
 
@@ -361,8 +362,38 @@ class MatchEvaluator:
         responses = [event for event in events if event.type == "interview_response"]
         arc_shifts = [event for event in events if event.type == "character_arc_shift"]
         story_reveals = [event for event in events if event.type == "story_reveal"]
-        strategies = [str(event.payload.get("strategy")) for event in responses]
-        response_diversity = _clamp(len(set(strategies)) / max(1, min(5, len(strategies))))
+        blends = [
+            event.payload.get("strategy_blend")
+            if isinstance(event.payload.get("strategy_blend"), dict)
+            else {str(event.payload.get("strategy")): 1.0}
+            for event in responses
+        ]
+        aggregate_weights: Counter[str] = Counter()
+        for blend in blends:
+            aggregate_weights.update(
+                {strategy: float(weight) for strategy, weight in blend.items()}
+            )
+        aggregate_total = sum(aggregate_weights.values())
+        aggregate_probabilities = (
+            [value / aggregate_total for value in aggregate_weights.values() if value > 0]
+            if aggregate_total
+            else []
+        )
+        aggregate_entropy = -sum(value * math.log(value) for value in aggregate_probabilities)
+        entropy_diversity = (
+            aggregate_entropy / math.log(7) if len(aggregate_probabilities) > 1 else 0.0
+        )
+        coverage = len([value for value in aggregate_weights.values() if value >= 0.35]) / 7
+        response_diversity = _clamp(0.7 * entropy_diversity + 0.3 * coverage)
+        blend_entropies: list[float] = []
+        for blend in blends:
+            weights = [max(0.0, float(value)) for value in blend.values()]
+            total = sum(weights)
+            probabilities = [value / total for value in weights if value > 0] if total else []
+            entropy = -sum(value * math.log(value) for value in probabilities)
+            blend_entropies.append(entropy / math.log(4) if len(probabilities) > 1 else 0.0)
+        mean_blend_entropy = sum(blend_entropies) / max(1, len(blend_entropies))
+        strategy_blend_complexity = _clamp(1 - abs(mean_blend_entropy - 0.55) / 0.55)
 
         matrices = [
             event.payload.get("psychological_matrix", {})
@@ -396,10 +427,12 @@ class MatchEvaluator:
             "reframe",
             "invoke_memory",
         }
+        identity_strategy_weight = sum(
+            sum(float(blend.get(strategy, 0.0)) for strategy in identity_strategies)
+            for blend in blends
+        ) / max(1, len(blends))
         identity_explanation = _clamp(
-            0.55
-            * sum(strategy in identity_strategies for strategy in strategies)
-            / max(1, len(strategies))
+            0.55 * identity_strategy_weight
             + 0.25
             * sum(event.type == "identity_memory_invoked" for event in events)
             / max(1, len(responses) / 3)
@@ -441,18 +474,20 @@ class MatchEvaluator:
             "identity_explanation": identity_explanation,
             "fact_provenance": provenance,
             "response_strategy_diversity": response_diversity,
+            "strategy_blend_complexity": strategy_blend_complexity,
             "character_arc": character_arc,
             "resilience": resilience,
         }
         composite = _clamp(
-            0.08 * question_coverage
-            + 0.16 * psychological_reactivity
-            + 0.10 * pressure_signal_grounding
-            + 0.16 * identity_explanation
-            + 0.12 * provenance
-            + 0.12 * response_diversity
-            + 0.16 * character_arc
-            + 0.10 * resilience
+            0.07 * question_coverage
+            + 0.15 * psychological_reactivity
+            + 0.09 * pressure_signal_grounding
+            + 0.14 * identity_explanation
+            + 0.11 * provenance
+            + 0.10 * response_diversity
+            + 0.10 * strategy_blend_complexity
+            + 0.15 * character_arc
+            + 0.09 * resilience
         )
         return {
             "composite": composite,

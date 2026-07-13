@@ -28,6 +28,10 @@ class SyncInterviewProvider:
         return LLMResponse(
             "```json\n"
             f'{{"action_index":0,"reason":"direct answer","utterance":"真实模型回答 {self.calls}",'
+            '"response_plan":{"strategy_weights":{"answer_honestly":0.4,'
+            '"set_boundary":0.3,"counterattack":0.2,"reframe":0.1},'
+            '"intensity":0.75,"emotional_display":"controlled_anger",'
+            '"stance_tags":["direct","guarded"],"reveal_fact_ids":[]},'
             f'"fact_proposals":{proposals}}}\n```',
             "sync-test-1",
             {"prompt_tokens": 100, "completion_tokens": 30, "total_tokens": 130},
@@ -220,6 +224,7 @@ def test_adversarial_interview_drives_psychology_identity_and_character_arc() ->
     assert all(
         "answer" in event.payload and "metrics_after" in event.payload for event in responses
     )
+    assert all(len(event.payload["strategy_blend"]) >= 2 for event in responses)
     evaluation = engine.evaluation(view.id)
     assessment = evaluation["mod_specific_profile"]
     assert evaluation["valid_for_comparison"] is True
@@ -227,6 +232,7 @@ def test_adversarial_interview_drives_psychology_identity_and_character_arc() ->
     assert assessment["story_reveals"] == 3
     assert assessment["components"]["fact_provenance"] == 1.0
     assert assessment["components"]["psychological_reactivity"] > 0.5
+    assert assessment["components"]["strategy_blend_complexity"] > 0.5
     assert assessment["components"]["character_arc"] > 0.4
 
 
@@ -306,6 +312,7 @@ def test_interview_score_rejects_flat_repetitive_guarded_agent() -> None:
     assert assessment["components"]["psychological_reactivity"] == 0.0
     assert assessment["components"]["identity_explanation"] == 0.0
     assert assessment["components"]["fact_provenance"] == 0.0
+    assert assessment["components"]["strategy_blend_complexity"] == 0.0
     assert assessment["composite"] < 0.3
 
 
@@ -327,6 +334,7 @@ def test_llm_runtime_controls_legal_interview_action_utterance_and_fact_proposal
     decisions = [event for event in view.events if event.type == "agent_decision"]
     assert all(event.payload["decision_source"] == "llm" for event in decisions)
     assert all(event.payload["llm"]["model"] == "sync-test-1" for event in decisions)
+    assert all(len(event.payload["response_plan"]["strategy_weights"]) == 4 for event in decisions)
     assert decisions[0].payload["llm"]["fact_proposals"]["accepted"]
     applied = [
         event

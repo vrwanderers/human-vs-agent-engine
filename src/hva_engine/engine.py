@@ -261,16 +261,13 @@ class GameEngine:
             decision_event = match.add_event(
                 "agent_decision", actor_id, action_type=action.type, **trace
             )
-            applied_action = action
+            applied_payload = {
+                **action.payload,
+                "response_plan": trace.get("response_plan", {}),
+            }
             if trace.get("utterance"):
-                applied_action = action.model_copy(
-                    update={
-                        "payload": {
-                            **action.payload,
-                            "utterance": str(trace["utterance"]),
-                        }
-                    }
-                )
+                applied_payload["utterance"] = str(trace["utterance"])
+            applied_action = action.model_copy(update={"payload": applied_payload})
             emitted = self._apply(
                 match,
                 actor_id,
@@ -290,7 +287,10 @@ class GameEngine:
                 match.mod.scores(match.state).get(actor_id, 0.0),
                 trace,
             )
-            if reveal := brain.maybe_reveal_story(match.status == MatchStatus.FINISHED):
+            if reveal := brain.maybe_reveal_story(
+                match.status == MatchStatus.FINISHED,
+                requested_fact_ids=trace.get("response_plan", {}).get("reveal_fact_ids", []),
+            ):
                 match.add_event("story_reveal", actor_id, **reveal)
             guard += 1
             if guard > 100:
