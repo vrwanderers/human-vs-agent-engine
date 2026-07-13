@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+neo4j = [
+  "neo4j>=5.20,<6",
+]
 dev = [
   "pytest>=8.2,<9",
   "pytest-cov>=5,<7",
@@ -25,6 +28,9 @@ dev = [
 
 [project.scripts]
 hva-benchmark = "hva_engine.benchmark:main"
+hva-llm-smoke = "hva_engine.llm_smoke:main"
+hva-llm-step-debug = "hva_engine.llm_step_debug:main"
+hva-narrative-calibration = "hva_engine.narrative_calibration:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hva_engine"]

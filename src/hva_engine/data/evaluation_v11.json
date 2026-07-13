@@ -1,0 +1,28 @@
+{
+  "version": "mvp-11",
+  "weights_by_mode": {
+    "human_vs_agent": {"player_engagement": 0.23, "engine_generality": 0.13, "dynamism": 0.17, "virtual_player_rating": 0.12, "ai_opponent_intelligence": 0.20, "ai_human_likeness": 0.15},
+    "agent_vs_agent": {"engine_generality": 0.15, "dynamism": 0.23, "virtual_player_rating": 0.15, "ai_opponent_intelligence": 0.32, "ai_human_likeness": 0.15},
+    "agent_coop": {"engine_generality": 0.14, "dynamism": 0.22, "virtual_player_rating": 0.15, "ai_opponent_intelligence": 0.34, "ai_human_likeness": 0.15},
+    "human_agent_coop": {"player_engagement": 0.18, "engine_generality": 0.13, "dynamism": 0.17, "virtual_player_rating": 0.12, "ai_opponent_intelligence": 0.25, "ai_human_likeness": 0.15}
+  },
+  "score_layers": {
+    "structural_integrity": {"rules_compliance": 0.35, "observation_isolation": 0.30, "context_ownership": 0.20, "fact_grounding": 0.15},
+    "behavioral_quality": {"human_likeness": 0.45, "task_intelligence": 0.30, "dynamism": 0.25}
+  },
+  "language_behavior": {
+    "exact_non_repetition": 0.24,
+    "surface_novelty": 0.22,
+    "question_grounding": 0.20,
+    "substantive_expression": 0.14,
+    "autonomous_utterance_rate": 0.20
+  },
+  "human_likeness_blend": {"mechanism_proxy": 0.40, "language_behavior": 0.60},
+  "targets": {
+    "structural_integrity": 0.95,
+    "behavioral_quality": 0.72,
+    "human_panel_correlation": 0.50,
+    "template_baseline_gap": 0.15,
+    "fallback_rate_strict": 0.0
+  }
+}

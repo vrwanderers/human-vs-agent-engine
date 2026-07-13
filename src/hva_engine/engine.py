@@ -1,24 +1,41 @@
 from __future__ import annotations
 
+import os
+from copy import deepcopy
 from dataclasses import dataclass, field
 from random import Random
 from typing import Any
 from uuid import uuid4
 
 from hva_engine.agent_runtime import AgentBrain
+from hva_engine.character_cards import CharacterCardError, CharacterCardRegistry
+from hva_engine.cognition import AgentIdentity, CognitiveProfile, RuntimeBehaviorPolicy
 from hva_engine.context import SharedBlackboard
 from hva_engine.evaluation import MatchEvaluator
+from hva_engine.fact_graph import AgentFactGraph
+from hva_engine.fact_store import FactStore, InMemoryFactStore, build_fact_store_from_env
+from hva_engine.llm import LLMDecisionClient, OpenAICompatibleProvider
 from hva_engine.models import (
     Action,
     ActorKind,
+    AgentCharacterSelection,
+    AgentTuning,
+    EventVisibility,
     GameEvent,
     MatchMode,
     MatchStatus,
     MatchView,
     Player,
 )
-from hva_engine.mods import CrisisCoop, DebateArena, RacingStrategy, TacticalDuel
+from hva_engine.mods import (
+    AdversarialInterview,
+    CrisisCoop,
+    DebateArena,
+    RacingStrategy,
+    TacticalDuel,
+)
 from hva_engine.mods.base import GameMod
+from hva_engine.observation import ObservationPolicy
 
 
 class EngineError(ValueError):
@@ -42,19 +59,43 @@ class Match:
     def status(self) -> MatchStatus:
         return MatchStatus.FINISHED if self.mod.is_terminal(self.state) else MatchStatus.ACTIVE
 
-    def add_event(self, event_type: str, actor_id: str | None = None, **payload: Any) -> GameEvent:
+    def add_event(
+        self,
+        event_type: str,
+        actor_id: str | None = None,
+        visibility: EventVisibility = EventVisibility.PUBLIC,
+        **payload: Any,
+    ) -> GameEvent:
         event = GameEvent(
-            seq=len(self.events) + 1, type=event_type, actor_id=actor_id, payload=payload
+            seq=len(self.events) + 1,
+            type=event_type,
+            actor_id=actor_id,
+            visibility=visibility,
+            payload=payload,
         )
         self.events.append(event)
         return event
 
 
 class GameEngine:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        fact_store: FactStore | None = None,
+        llm_decision_client: LLMDecisionClient | None = None,
+        llm_mod_ids: set[str] | None = None,
+        llm_fallback: bool = True,
+        character_cards: CharacterCardRegistry | None = None,
+    ) -> None:
         self.mods: dict[str, GameMod] = {}
         self.matches: dict[str, Match] = {}
         self.evaluator = MatchEvaluator()
+        self.fact_store = fact_store or InMemoryFactStore()
+        self.llm_decision_client = llm_decision_client
+        self.llm_mod_ids = llm_mod_ids or set()
+        self.llm_fallback = llm_fallback
+        self.agent_runtime = "llm" if llm_decision_client is not None else "baseline"
+        self.character_cards = character_cards or CharacterCardRegistry.load_default()
+        self.observation_policy = ObservationPolicy()
 
     def register(self, mod: GameMod) -> None:
         if mod.id in self.mods:
@@ -68,6 +109,8 @@ class GameEngine:
         seed: int | None = None,
         mode: MatchMode | str | None = None,
         reverse_seats: bool = False,
+        agent_tuning: AgentTuning | None = None,
+        agent_characters: list[AgentCharacterSelection] | None = None,
     ) -> MatchView:
         if mod_id not in self.mods:
             raise EngineError(f"Unknown MOD: {mod_id}")
@@ -91,19 +134,53 @@ class GameEngine:
         players = self._make_players(selected_mode, human_name)
         if reverse_seats:
             players.reverse()
+        selections = agent_characters or []
+        agent_players = [player for player in players if player.kind == ActorKind.AGENT]
+        if len(selections) > len(agent_players):
+            raise EngineError(
+                f"Received {len(selections)} character cards for {len(agent_players)} agents"
+            )
+        resolved_cards: dict[str, tuple[Any, str]] = {}
+        for player, selection in zip(agent_players, selections, strict=False):
+            try:
+                card, source_kind = self.character_cards.resolve(selection)
+            except CharacterCardError as exc:
+                raise EngineError(str(exc)) from exc
+            player.name = card.name
+            resolved_cards[player.id] = (card, source_kind)
         human = next((p for p in players if p.kind == ActorKind.HUMAN), None)
-        brains = {
-            p.id: AgentBrain(p.id, "coop" if "coop" in selected_mode.value else "opponent")
-            for p in players
-            if p.kind == ActorKind.AGENT
-        }
+        state = mod.initial_state(players, rng)
+        tuning = agent_tuning or AgentTuning()
+        behavior_policy = RuntimeBehaviorPolicy.from_tuning(tuning)
+        brains: dict[str, AgentBrain] = {}
+        for player in players:
+            if player.kind != ActorKind.AGENT:
+                continue
+            role = "coop" if "coop" in selected_mode.value else "opponent"
+            if player.id in resolved_cards:
+                card, source_kind = resolved_cards[player.id]
+                profile, identity = self.character_cards.instantiate(
+                    card, behavior_policy, source_kind
+                )
+            else:
+                profile = CognitiveProfile.sample(rng, role, behavior_policy)
+                identity = AgentIdentity.sample(player.name, profile, role, rng)
+            fact_graph = AgentFactGraph.from_identity(player.id, identity, self.fact_store)
+            brains[player.id] = AgentBrain(
+                player.id,
+                role,
+                profile,
+                identity,
+                behavior_policy,
+                fact_graph,
+            )
         match = Match(
             id=match_id,
             mod=mod,
             mode=selected_mode,
             players=players,
             human_player_id=human.id if human else None,
-            state=mod.initial_state(players, rng),
+            state=state,
             rng=rng,
             agent_brains=brains,
             blackboard=(
@@ -112,10 +189,22 @@ class GameEngine:
                 else None
             ),
         )
-        match.add_event("match_created", mod_id=mod_id, mode=selected_mode.value, seed=seed)
+        match.add_event(
+            "match_created",
+            mod_id=mod_id,
+            mode=selected_mode.value,
+            seed=seed,
+            character_cards={
+                player_id: (
+                    card.id if source_kind == "builtin" else f"custom:{card.id}"
+                )
+                for player_id, (card, source_kind) in resolved_cards.items()
+            },
+            character_decision_model="runtime_cognition_not_scripted_actions",
+        )
         self.matches[match_id] = match
         self._run_agents(match)
-        return self.view(match_id)
+        return self.view(match_id, match.human_player_id)
 
     def _make_players(self, mode: MatchMode, human_name: str) -> list[Player]:
         if mode in {MatchMode.HUMAN_VS_AGENT, MatchMode.HUMAN_AGENT_COOP}:
@@ -141,7 +230,7 @@ class GameEngine:
             raise EngineError(f"Illegal action. Allowed actions: {allowed}")
         self._apply(match, actor_id, canonical, source="player")
         self._run_agents(match)
-        return self.view(match_id)
+        return self.view(match_id, match.human_player_id)
 
     def _apply(
         self, match: Match, actor_id: str, action: Action, source: str
@@ -156,11 +245,12 @@ class GameEngine:
             for key in set(previous_state) | set(new_state)
             if previous_state.get(key) != new_state.get(key)
         )
+        public_action = match.mod.public_action(action, actor_id)
         match.add_event(
             "action_applied",
             actor_id,
-            action_type=action.type,
-            action_payload=action.payload,
+            action_type=public_action.type,
+            action_payload=public_action.payload,
             source=source,
             scores_before=scores_before,
             scores_after=scores_after,
@@ -200,22 +290,62 @@ class GameEngine:
                 raise EngineError("MOD returned no legal action for an active agent")
             brain = match.agent_brains[actor_id]
             shared_facts = match.blackboard.view_for(actor_id) if match.blackboard else []
+            observation = self.observation_policy.for_agent(
+                mod=match.mod,
+                state=match.state,
+                scores=match.mod.scores(match.state),
+                events=self._events_for_agent(match, actor_id),
+                shared_facts=shared_facts,
+                agent_id=actor_id,
+            )
             brain.observe(
                 match.mod,
-                match.state,
-                match.mod.scores(match.state),
-                match.events,
+                observation.state,
+                observation.scores,
+                observation.events,
                 match.id,
-                shared_facts,
+                observation.shared_facts,
             )
-            action, trace = brain.decide(match.mod, match.state, legal, match.rng)
+            use_llm = self.llm_decision_client if match.mod.id in self.llm_mod_ids else None
+            action, trace = brain.decide(
+                match.mod,
+                observation.state,
+                legal,
+                match.rng,
+                decision_client=use_llm,
+                llm_fallback=self.llm_fallback,
+            )
             if action not in legal:
                 raise EngineError("Agent policy returned an illegal action")
             score_before = match.mod.scores(match.state).get(actor_id, 0.0)
-            decision_event = match.add_event(
-                "agent_decision", actor_id, action_type=action.type, **trace
+            private_influence = trace.pop("_private_influence_intent")
+            trace["observation_policy"] = observation.diagnostics
+            match.add_event(
+                "agent_influence_intent",
+                actor_id,
+                visibility=EventVisibility.ENGINE_PRIVATE,
+                **private_influence,
             )
-            emitted = self._apply(match, actor_id, action, source="baseline_agent")
+            decision_event = match.add_event(
+                "agent_decision",
+                actor_id,
+                visibility=EventVisibility.ENGINE_PRIVATE,
+                action_type=action.type,
+                **trace,
+            )
+            applied_payload = {
+                **action.payload,
+                "response_plan": trace.get("response_plan", {}),
+            }
+            if trace.get("utterance"):
+                applied_payload["utterance"] = str(trace["utterance"])
+            applied_action = action.model_copy(update={"payload": applied_payload})
+            emitted = self._apply(
+                match,
+                actor_id,
+                applied_action,
+                source="llm_agent" if trace["decision_source"] == "llm" else "baseline_agent",
+            )
             expected = set(trace["prediction"]["expected_events"])
             actual = {item["type"] for item in emitted}
             decision_event.payload["prediction_verified"] = bool(expected) and bool(
@@ -227,10 +357,44 @@ class GameEngine:
                 emitted,
                 score_before,
                 match.mod.scores(match.state).get(actor_id, 0.0),
+                trace,
             )
+            decision_event.payload["psychological_matrix_after_outcome"] = (
+                brain.cognition.psychology_view()
+            )
+            decision_event.payload["outcome_reappraisal"] = brain.last_outcome_reappraisal
+            requested_reveals = trace.get("response_plan", {}).get(
+                "reveal_fact_ids", []
+            )
+            reveal = brain.maybe_reveal_story(
+                match.status == MatchStatus.FINISHED,
+                requested_fact_ids=requested_reveals,
+            )
+            if reveal:
+                match.add_event("story_reveal", actor_id, **reveal)
+            if requested_reveals:
+                match.add_event(
+                    "story_reveal_diagnostic",
+                    actor_id,
+                    visibility=EventVisibility.ENGINE_PRIVATE,
+                    **brain.last_story_reveal_diagnostic,
+                )
             guard += 1
             if guard > 100:
                 raise EngineError("Agent turn loop exceeded safety limit")
+
+    def _events_for_agent(self, match: Match, agent_id: str) -> list[GameEvent]:
+        """Return public history plus only this agent's own engine-private intent."""
+
+        return [
+            event
+            for event in match.events
+            if event.visibility == EventVisibility.PUBLIC
+            or (
+                event.visibility == EventVisibility.ENGINE_PRIVATE
+                and event.actor_id == agent_id
+            )
+        ]
 
     def get(self, match_id: str) -> Match:
         try:
@@ -238,7 +402,43 @@ class GameEngine:
         except KeyError as exc:
             raise EngineError(f"Unknown match: {match_id}") from exc
 
-    def view(self, match_id: str) -> MatchView:
+    def view(self, match_id: str, viewer_id: str | None = None) -> MatchView:
+        match = self.get(match_id)
+        if viewer_id is not None and viewer_id not in {player.id for player in match.players}:
+            raise EngineError("Viewer is not a player in this match")
+        current = match.mod.current_player_id(match.state)
+        legal = (
+            match.mod.legal_actions(match.state, current)
+            if current and viewer_id == current
+            else []
+        )
+        return MatchView(
+            id=match.id,
+            mod_id=match.mod.id,
+            mode=match.mode,
+            status=match.status,
+            players=deepcopy(match.players),
+            human_player_id=match.human_player_id,
+            current_player_id=current,
+            state=deepcopy(match.mod.public_state(deepcopy(match.state), viewer_id)),
+            legal_actions=deepcopy(legal),
+            scores=deepcopy(match.mod.scores(match.state)),
+            events=[
+                deepcopy(event)
+                for event in match.events
+                if event.visibility == EventVisibility.PUBLIC
+            ],
+            agent_summaries={
+                pid: deepcopy(brain.public_summary())
+                for pid, brain in match.agent_brains.items()
+            },
+            view_scope="player" if viewer_id else "public",
+            viewer_id=viewer_id,
+        )
+
+    def debug_view(self, match_id: str) -> MatchView:
+        """Trusted-development view. Never expose this without authorization."""
+
         match = self.get(match_id)
         current = match.mod.current_player_id(match.state)
         legal = match.mod.legal_actions(match.state, current) if current else []
@@ -250,11 +450,12 @@ class GameEngine:
             players=match.players,
             human_player_id=match.human_player_id,
             current_player_id=current,
-            state=match.mod.public_state(match.state),
+            state=match.state,
             legal_actions=legal,
             scores=match.mod.scores(match.state),
             events=match.events,
             agent_summaries={pid: brain.summary() for pid, brain in match.agent_brains.items()},
+            view_scope="admin_debug",
         )
 
     def evaluation(self, match_id: str) -> dict[str, Any]:
@@ -327,14 +528,51 @@ class GameEngine:
         packet = brain.last_context
         return {
             "owner_agent_id": packet.owner_agent_id,
+            "context_id": packet.context_id,
+            "content_sha256": packet.content_sha256,
             "layers": packet.layers,
             "diagnostics": packet.diagnostics,
+            "decision_context": packet.decision_context,
             "messages": [message.__dict__ for message in packet.messages],
         }
 
+    def public_fact_graph(self, match_id: str, agent_id: str) -> dict[str, Any]:
+        match = self.get(match_id)
+        try:
+            brain = match.agent_brains[agent_id]
+        except KeyError as exc:
+            raise EngineError("Unknown agent in this match") from exc
+        return brain.fact_graph.public_view()
+
 
 def build_default_engine() -> GameEngine:
-    engine = GameEngine()
-    for mod in (TacticalDuel(), RacingStrategy(), DebateArena(), CrisisCoop()):
+    runtime = os.environ.get("HVA_AGENT_RUNTIME", "baseline").strip().lower()
+    decision_client: LLMDecisionClient | None = None
+    llm_mod_ids: set[str] = set()
+    if runtime in {"llm", "hybrid"}:
+        provider = OpenAICompatibleProvider.from_env()
+        decision_client = LLMDecisionClient(
+            provider,
+            temperature=float(os.environ.get("HVA_LLM_TEMPERATURE", "0.75")),
+            max_tokens=int(os.environ.get("HVA_LLM_MAX_TOKENS", "900")),
+        )
+        llm_mod_ids = {
+            value.strip()
+            for value in os.environ.get("HVA_LLM_MODS", "adversarial_interview").split(",")
+            if value.strip()
+        }
+    engine = GameEngine(
+        build_fact_store_from_env(),
+        llm_decision_client=decision_client,
+        llm_mod_ids=llm_mod_ids,
+        llm_fallback=os.environ.get("HVA_LLM_FALLBACK", "true").lower() not in {"0", "false", "no"},
+    )
+    for mod in (
+        TacticalDuel(),
+        RacingStrategy(),
+        DebateArena(),
+        CrisisCoop(),
+        AdversarialInterview(),
+    ):
         engine.register(mod)
     return engine
