@@ -41,7 +41,7 @@ hva-llm-step-debug --character-card ah_q --content-mode mature_fiction \
   --context-output full --report /tmp/hva-step-report.json
 ```
 
-命令每轮先向 stdout 输出一行 `llm_decision_request`，其中包含冻结的心理矩阵、评价、计划、检索记忆、事实图谱、合法动作、影响可供性及可选完整提示；随后暂停，只从 stdin 接受一行 JSON。收到后输出 `llm_decision_received`，再由正常 `LLMDecisionClient`、战略影响约束、事实防火墙和 MOD 规则执行，最后输出 `step_result`。六轮均要求外部 LLM 回答，回退固定关闭。调试桥会先校验顶层结构和事实提案字段；格式错误会输出 `llm_decision_rejected`，停留在当前步等待重试，不推进世界状态。例如事实提案必须使用公开契约字段 `subject`、`object`，不能使用图存储内部字段名。该模式会显示私有调试数据，只能在可信开发环境使用；生成的 report 也应按私有测试工件管理。
+命令每轮先向 stdout 输出一行 `llm_decision_request`，其中包含冻结的心理矩阵、评价、计划、检索记忆、连续决策倾向、事实图谱、合法动作、影响可供性及可选完整提示；随后暂停，只从 stdin 接受一行 JSON。收到后输出 `llm_decision_received`，再由正常 `LLMDecisionClient`、战略影响约束、事实防火墙和 MOD 规则执行，最后输出 `step_result`。结果记录决策时与行动后的心理矩阵、结果再评价、故事揭露节奏诊断和上下文分配诊断。六轮均要求外部 LLM 回答，回退固定关闭。调试桥会先校验动作索引、策略权重、虚构作用域、威慑依据和事实提案字段；格式错误会输出 `llm_decision_rejected`，停留在当前步等待重试，不推进世界状态。例如事实提案必须使用公开契约字段 `subject`、`object`，不能使用图存储内部字段名。该模式会显示私有调试数据，只能在可信开发环境使用；生成的 report 也应按私有测试工件管理。
 
 结构化输出协议：
 
@@ -104,10 +104,11 @@ hva-llm-step-debug --character-card ah_q --content-mode mature_fiction \
 7. `canonical_fact_graph`：当前可用事实及自由发挥约束
 8. `appraisal_and_coping` / `situation_activated_traits`：评价、应对、心理矩阵和情境人格
 9. `semantic_reflections` / `persistent_plan`：引用情景证据的反思和跨回合计划
-10. `social_beliefs`：可错的信任、尊重、敌意、真诚度和对手行为信念
-11. `narrative_dynamics`：竞争动机、承诺、秘密压力、身份失调、冲动压力、社会易感性、自我许可、价值/关系/承诺债务、待成熟后果，以及当前合法动作的叙事可供性
-12. `current_observation` / `deliberation_protocol`：观察、战略影响可供性、快慢模式与有限理性协议
-13. `legal_actions`：规范化动作列表及 JSON 输出协议
+10. `decision_tendencies`：每个合法动作的连续吸引力、排名、相对峰值和主要动因；明确标记为动机压力而非命令
+11. `social_beliefs`：可错的信任、尊重、敌意、真诚度和对手行为信念
+12. `narrative_dynamics`：竞争动机、承诺、秘密压力、身份失调、冲动压力、社会易感性、自我许可、价值/关系/承诺债务、待成熟后果，以及当前合法动作的叙事可供性
+13. `current_observation` / `deliberation_protocol`：观察、战略影响可供性、快慢模式与有限理性协议
+14. `legal_actions`：规范化动作列表及 JSON 输出协议
 
 系统/规则/角色进入 system message，其余进入 user message。观察值使用“不可信数据”标记，防止游戏文本或直播输入覆盖上层指令。
 
@@ -126,15 +127,16 @@ hva-llm-step-debug --character-card ah_q --content-mode mature_fiction \
 
 ## 上下文压缩
 
-默认上下文预算为 12,000 字符，私有检索记忆预算为 2,400 字符。超出时：
+默认上下文预算为 22,000 字符，私有检索记忆预算为 2,400 字符。超出时：
 
-- 固定保留系统安全、规则、角色、当前观察和合法动作；
+- 固定保留系统安全、规则和角色，并优先完整保留私有检索记忆、活跃事实图谱、心理评价、持续计划、连续决策倾向、当前观察和合法动作；
 - 认知层先按时近性、重要性、相关性和情绪一致性选择至多 4 条情景记忆；
 - 只把检索结果注入 Provider，未选中的私有经历不会因为靠近上下文尾部而自动进入；
 - 事实图谱、评价/应对、反思、计划、社会信念、人物动力、当前观察和合法动作分别分配字符预算；
-- 总预算触顶时逐层压缩内容，但保留所有层级标题和首尾证据，不再从整段尾部截断；
+- 事实图谱只重复活跃事实，并把已替代版本压缩为最近修订历史；人物动力只保留最强动机、承诺和决策相关可供性；
+- 总预算触顶时按决策关键性分配，不做所有层平均缩水；低优先级层用带 `section_truncated` 标签的合法 JSON 封装首尾证据，不留下破损 JSON；
 - 不用另一个 LLM 做摘要，避免摘要成本、漂移和跨 Agent 泄露；
-- 诊断字段记录是否压缩、压缩前条数、共享事实数和最终字符量。
+- 诊断字段记录原始长度、上限、实际分配、被截断层、关键层是否截断、共享事实数和最终字符量。
 
 后续可增加可插拔 `ContextCompressor`，但压缩器输入必须限定为单个 Agent 的私有分区；团队摘要则只能消费共享黑板。
 

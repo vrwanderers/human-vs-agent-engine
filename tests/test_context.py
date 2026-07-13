@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -67,6 +68,45 @@ def test_layer_budget_preserves_every_header_instead_of_tail_slicing() -> None:
     assert packet.diagnostics["truncated_sections"]
     for layer in range(7, 15):
         assert f"[L{layer}" in rendered
+
+
+def test_priority_budget_keeps_decision_critical_layers_auditable() -> None:
+    packet = ContextComposer(ContextPolicy(total_char_budget=8_000)).compose(
+        match_id="priority-match",
+        agent_id="agent-a",
+        role="opponent",
+        mod=DebateArena(),
+        state={"observation": "pressure" * 1_000},
+        world_model={"objective": "hold a defensible position"},
+        memory=[{"detail": "memory" * 1_000}],
+        legal_actions=[Action(type="evidence"), Action(type="rebuttal")],
+        shared_facts=[],
+        decision_tendencies={
+            "semantics": "fallible_motivational_attraction_not_action_command",
+            "actions": [
+                {"action_index": 0, "attraction": 0.61, "rank": 1},
+                {"action_index": 1, "attraction": 0.39, "rank": 2},
+            ],
+        },
+        appraisal={"coping": "assert_boundary"},
+        current_plan={"strategic_goal": "hold a defensible position"},
+    )
+
+    diagnostics = packet.diagnostics
+    assert diagnostics["decision_tendencies_layered"] is True
+    assert diagnostics["section_allocations"]["legal_actions"] > 0
+    assert diagnostics["section_original_chars"]["current_observation"] > 0
+    assert diagnostics["section_capped_chars"]["current_observation"] <= 4_800
+    assert "legal_actions" not in diagnostics["critical_sections_truncated"]
+
+
+def test_truncated_context_payload_remains_valid_json() -> None:
+    rendered = ContextComposer()._valid_truncated_payload(
+        json.dumps({"oversized": "context" * 200}), 240
+    )
+    parsed = json.loads(rendered)
+    assert len(rendered) <= 240
+    assert parsed["section_truncated"] is True
 
 
 class FakeProvider:

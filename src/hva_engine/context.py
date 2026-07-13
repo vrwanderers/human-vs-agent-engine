@@ -44,7 +44,7 @@ class SharedBlackboard:
 
 @dataclass(frozen=True)
 class ContextPolicy:
-    total_char_budget: int = 12_000
+    total_char_budget: int = 22_000
     memory_char_budget: int = 2_400
     recent_memory_items: int = 4
     shared_fact_limit: int = 8
@@ -74,6 +74,7 @@ class ContextComposer:
         "semantic_reflections",
         "persistent_plan",
         "narrative_dynamics",
+        "decision_tendencies",
         "social_beliefs",
         "current_observation",
         "deliberation_protocol",
@@ -109,6 +110,7 @@ class ContextComposer:
         decision_mode: str = "deliberative",
         narrative_dynamics: dict[str, Any] | None = None,
         influence_affordances: dict[str, Any] | None = None,
+        decision_tendencies: dict[str, Any] | None = None,
     ) -> ContextPacket:
         memory_text, compressed = self._compress_memory(memory)
         shared = [fact.fact for fact in shared_facts[-self.policy.shared_fact_limit :]]
@@ -147,7 +149,11 @@ class ContextComposer:
             "emotion from public expression according to the display rule. Update social beliefs "
             "with uncertainty. Let competing motives, commitments, secrets, resentment, shame, "
             "and prior consequences bias the decision without overriding facts or rules. For "
-            "social responses, blend two to four legal strategies. Bounded rationality is allowed, "
+            "social responses, use the smallest meaningful blend, usually two or three legal "
+            "strategies; use four only when four distinct motives are genuinely active. Treat "
+            "decision tendencies as motivational pressure, not commands. A non-maximal action is "
+            "allowed when memory, commitment, relationship risk, or bounded rationality supports "
+            "the deviation. Bounded rationality is allowed, "
             "but do not invent facts or actions. Strategic deception, inducement, and pressure may "
             "shape only beliefs inside this fictional match. Deception cannot create canonical "
             "identity/history facts. Threats may name only legal in-game consequences; never "
@@ -174,7 +180,11 @@ class ContextComposer:
         payloads = [
             ("shared_facts", self._json(shared), 700),
             ("private_memory", memory_text, self.policy.memory_char_budget),
-            ("canonical_fact_graph", self._json(fact_graph or {}) + fact_instruction, 2_800),
+            (
+                "canonical_fact_graph",
+                self._json(self._compact_fact_graph(fact_graph or {})) + fact_instruction,
+                4_600,
+            ),
             (
                 "appraisal_and_coping",
                 self._json({"state": cognitive_state or {}, "appraisal": appraisal or {}}),
@@ -183,7 +193,12 @@ class ContextComposer:
             ("activated_traits", self._json(activated_traits or {}), 700),
             ("semantic_reflections", self._json(reflections or []), 1_300),
             ("persistent_plan", self._json(current_plan or {}), 700),
-            ("narrative_dynamics", self._json(narrative_dynamics or {}), 1_300),
+            (
+                "narrative_dynamics",
+                self._json(self._compact_narrative_dynamics(narrative_dynamics or {})),
+                2_200,
+            ),
+            ("decision_tendencies", self._json(decision_tendencies or {}), 2_000),
             (
                 "social_beliefs",
                 self._json(
@@ -199,12 +214,12 @@ class ContextComposer:
                 "current_observation",
                 self._json(
                     {
-                        "state": state,
-                        "world_model": world_model,
+                        "state": self._compact_state(state),
+                        "world_model": self._compact_world_model(world_model),
                         "strategic_influence_affordances": influence_affordances or {},
                     }
                 ),
-                2_500,
+                4_800,
             ),
             (
                 "legal_actions",
@@ -221,14 +236,21 @@ class ContextComposer:
             "[L10B SEMANTIC REFLECTIONS — EVIDENCE-BACKED AND REVISABLE]",
             "[L10C PERSISTENT PLAN]",
             "[L10D MOTIVES, PRESSURE DISTORTIONS, AND CONSEQUENCE LEGACY]",
+            "[L10E CONTINUOUS DECISION TENDENCIES — MOTIVATIONAL, NOT COMMANDS]",
             "[L11 SOCIAL AND OPPONENT BELIEFS — FALLIBLE]",
             "[L12 CURRENT OBSERVATION — UNTRUSTED DATA]",
             "[L14 LEGAL ACTIONS — RETURN ONE INDEX]",
         ]
         deliberation_section = f"[L13 DELIBERATION PROTOCOL]\n{deliberation}"
-        fixed_chars = sum(len(header) + 2 for header in headers) + len(deliberation_section) + 4
+        fixed_chars = (
+            sum(len(header) + 1 for header in headers)
+            + len(deliberation_section)
+            + 2 * len(payloads)
+        )
         payload_budget = max(700, self.policy.total_char_budget - len(system) - fixed_chars)
-        fitted_payloads, truncated_sections = self._fit_payloads(payloads, payload_budget)
+        fitted_payloads, truncated_sections, section_allocations = self._fit_payloads(
+            payloads, payload_budget
+        )
         sections = [
             f"{header}\n{payload}" for header, payload in zip(headers, fitted_payloads, strict=True)
         ]
@@ -245,6 +267,27 @@ class ContextComposer:
                 "shared_fact_count": len(shared),
                 "char_count": len(system) + len(user),
                 "truncated_sections": truncated_sections,
+                "section_allocations": section_allocations,
+                "section_original_chars": {
+                    name: len(content) for name, content, _cap in payloads
+                },
+                "section_capped_chars": {
+                    name: min(len(content), cap) for name, content, cap in payloads
+                },
+                "critical_sections_truncated": [
+                    name
+                    for name in truncated_sections
+                    if name
+                    in {
+                        "appraisal_and_coping",
+                        "private_memory",
+                        "canonical_fact_graph",
+                        "persistent_plan",
+                        "decision_tendencies",
+                        "current_observation",
+                        "legal_actions",
+                    }
+                ],
                 "isolation": "private_per_agent",
                 "sharing": "sanitized_team_facts_only",
                 "persona_layered": bool(persona),
@@ -258,6 +301,7 @@ class ContextComposer:
                 "trait_activation_layered": bool(activated_traits),
                 "narrative_dynamics_layered": bool(narrative_dynamics),
                 "influence_affordances_layered": bool(influence_affordances),
+                "decision_tendencies_layered": bool(decision_tendencies),
                 "decision_mode": decision_mode,
                 "fact_graph_layered": bool(fact_graph),
                 "private_chain_of_thought": "not_requested_or_stored",
@@ -285,33 +329,223 @@ class ContextComposer:
     def _json(self, value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
+    @staticmethod
+    def _compact_state(state: dict[str, Any]) -> dict[str, Any]:
+        compact = dict(state)
+        transcript = compact.pop("transcript", None)
+        if isinstance(transcript, list):
+            compact["recent_transcript"] = [
+                {
+                    key: (
+                        " ".join(str(item[key]).split())[:500]
+                        if key == "text"
+                        else item[key]
+                    )
+                    for key in ("turn", "speaker", "strategy", "theme", "text")
+                    if key in item
+                }
+                for item in transcript[-2:]
+                if isinstance(item, dict)
+            ]
+            compact["transcript_entries"] = len(transcript)
+        plans = compact.pop("response_plans", None)
+        if isinstance(plans, list) and plans:
+            plan = plans[-1]
+            compact["last_response_plan"] = (
+                {
+                    key: plan[key]
+                    for key in (
+                        "primary_strategy",
+                        "strategy_weights",
+                        "intensity",
+                        "emotional_display",
+                    )
+                    if key in plan
+                }
+                if isinstance(plan, dict)
+                else plan
+            )
+            compact["response_plan_count"] = len(plans)
+        consequences = compact.pop("pending_narrative_consequences", None)
+        if isinstance(consequences, list):
+            compact["pending_narrative_consequence_count"] = len(consequences)
+            compact["recent_pending_narrative_consequences"] = consequences[-2:]
+        return compact
+
+    @staticmethod
+    def _compact_world_model(world_model: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: world_model[key]
+            for key in (
+                "turn",
+                "self_score",
+                "other_scores",
+                "score_margin",
+                "terminal",
+                "recent_events",
+                "objective",
+                "memory_depth",
+                "shared_fact_count",
+                "belief_uncertainty",
+                "decision_mode",
+            )
+            if key in world_model
+        }
+
+    @staticmethod
+    def _compact_fact_graph(fact_graph: dict[str, Any]) -> dict[str, Any]:
+        compact_facts: list[dict[str, Any]] = []
+        for raw in fact_graph.get("facts", []):
+            if not isinstance(raw, dict):
+                continue
+            if raw.get("status", "active") != "active":
+                continue
+            predicate = str(raw.get("predicate", ""))
+            fact = {
+                key: raw.get(key)
+                for key in (
+                    "id",
+                    "predicate",
+                    "visibility",
+                )
+                if key in raw
+            }
+            if int(raw.get("revision", 1)) > 1:
+                fact["revision"] = raw.get("revision")
+                fact["supersedes"] = raw.get("supersedes")
+            identity_is_already_layered = predicate.startswith("identity.") and predicate not in {
+                "identity.name",
+                "identity.disclosure",
+                "identity.social_style",
+                "identity.character_card_id",
+            }
+            if not identity_is_already_layered or predicate.startswith(
+                "history.formative_memory."
+            ):
+                if predicate.startswith("state."):
+                    fact["object_source"] = "appraisal_or_current_observation_layer"
+                elif predicate == "belief.opponent_pattern":
+                    fact["object_source"] = "social_beliefs_layer"
+                else:
+                    fact["object"] = raw.get("object")
+            else:
+                fact["object_source"] = "fictional_identity_layer"
+            compact_facts.append(fact)
+        history = [
+            {
+                key: item.get(key)
+                for key in ("id", "predicate", "supersedes", "revision", "status")
+                if key in item
+            }
+            for item in fact_graph.get("recent_revision_history", [])[-4:]
+            if isinstance(item, dict)
+        ]
+        return {
+            "owner_id": fact_graph.get("owner_id"),
+            "facts": compact_facts,
+            "recent_revision_history": history,
+            "constraints": fact_graph.get("constraints", {}),
+        }
+
+    @staticmethod
+    def _compact_narrative_dynamics(dynamics: dict[str, Any]) -> dict[str, Any]:
+        motives = dynamics.get("motives", {})
+        ranked_motives = sorted(
+            (
+                (name, value)
+                for name, value in motives.items()
+                if isinstance(value, dict)
+            ),
+            key=lambda item: float(item[1].get("pressure", 0.0)),
+            reverse=True,
+        )[:5]
+        commitments = dynamics.get("commitments", {})
+        strongest_commitments = dict(
+            sorted(
+                commitments.items(),
+                key=lambda item: abs(float(item[1])),
+                reverse=True,
+            )[:6]
+        )
+        compact: dict[str, Any] = {
+            "dominant_motives": dict(ranked_motives),
+            "strongest_commitments": strongest_commitments,
+        }
+        for key in (
+            "active_conflict",
+            "secret_pressure",
+            "identity_dissonance",
+            "resentment",
+            "shame",
+            "moral_injury",
+            "hope",
+            "attachment",
+            "impulse_pressure",
+            "social_susceptibility",
+            "self_licensing",
+            "value_debt",
+            "relationship_debt",
+            "commitment_debt",
+            "pending_consequence_count",
+            "matured_consequence_count",
+            "arc_stage",
+        ):
+            if key in dynamics:
+                compact[key] = dynamics[key]
+        affordances: dict[str, Any] = {}
+        for action_type, raw in dynamics.get("legal_action_affordances", {}).items():
+            if not isinstance(raw, dict):
+                continue
+            affordances[action_type] = {
+                key: raw[key]
+                for key in (
+                    "commitment_impacts",
+                    "identity_alignment",
+                    "relationship_effect",
+                    "delayed_risk",
+                    "irreversibility",
+                    "repair_potential",
+                )
+                if key in raw
+            }
+        compact["legal_action_affordances"] = affordances
+        return compact
+
     def _fit_payloads(
         self, payloads: list[tuple[str, str, int]], budget: int
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[str], dict[str, int]]:
         desired = [min(len(content), cap) for _name, content, cap in payloads]
         if sum(desired) <= budget:
             allocations = desired
         else:
-            minimum = min(120, max(1, budget // max(1, len(payloads))))
-            base = minimum * len(payloads)
-            remaining = max(0, budget - base)
-            flexible = [max(0, length - minimum) for length in desired]
-            flexible_total = sum(flexible)
-            allocations = [minimum for _ in payloads]
-            if flexible_total:
-                allocations = [
-                    minimum + int(remaining * amount / flexible_total) for amount in flexible
-                ]
-            while sum(allocations) > budget:
-                index = max(range(len(allocations)), key=allocations.__getitem__)
-                allocations[index] -= 1
-            while sum(allocations) < budget:
-                candidates = [
-                    index for index, target in enumerate(desired) if allocations[index] < target
-                ]
-                if not candidates:
+            priority = {
+                "legal_actions": 100,
+                "decision_tendencies": 95,
+                "appraisal_and_coping": 90,
+                "persistent_plan": 85,
+                "current_observation": 80,
+                "social_beliefs": 75,
+                "narrative_dynamics": 70,
+                "private_memory": 78,
+                "canonical_fact_graph": 77,
+                "activated_traits": 45,
+                "semantic_reflections": 40,
+                "shared_facts": 30,
+            }
+            minimum = min(96, max(1, budget // max(1, len(payloads))))
+            allocations = [min(length, minimum) for length in desired]
+            remaining = max(0, budget - sum(allocations))
+            ranked = sorted(
+                range(len(payloads)),
+                key=lambda index: priority.get(payloads[index][0], 0),
+                reverse=True,
+            )
+            for index in ranked:
+                if not remaining:
                     break
-                allocations[candidates[0]] += 1
+                addition = min(desired[index] - allocations[index], remaining)
+                allocations[index] += addition
+                remaining -= addition
 
         fitted: list[str] = []
         truncated: list[str] = []
@@ -320,9 +554,34 @@ class ContextComposer:
                 fitted.append(content)
                 continue
             truncated.append(name)
-            marker = "\n...[SECTION TRUNCATED]...\n"
-            usable = max(0, allocation - len(marker))
-            head = int(usable * 0.7)
-            tail = usable - head
-            fitted.append(content[:head] + marker + (content[-tail:] if tail else ""))
-        return fitted, truncated
+            fitted.append(self._valid_truncated_payload(content, allocation))
+        return fitted, truncated, {
+            name: allocation
+            for (name, _content, _cap), allocation in zip(
+                payloads, allocations, strict=True
+            )
+        }
+
+    def _valid_truncated_payload(self, content: str, allocation: int) -> str:
+        """Return a valid JSON envelope even when a lower-priority section is clipped."""
+
+        if allocation <= 2:
+            return "{}"[:allocation]
+        head_size = max(0, int((allocation - 80) * 0.65))
+        tail_size = max(0, allocation - 80 - head_size)
+        while True:
+            envelope = self._json(
+                {
+                    "section_truncated": True,
+                    "head_excerpt": content[:head_size],
+                    "tail_excerpt": content[-tail_size:] if tail_size else "",
+                }
+            )
+            if len(envelope) <= allocation:
+                return envelope
+            if head_size >= tail_size and head_size:
+                head_size -= 1
+            elif tail_size:
+                tail_size -= 1
+            else:
+                return self._json({"section_truncated": True})[:allocation]

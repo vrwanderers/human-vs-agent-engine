@@ -8,6 +8,8 @@
 - 6 维在线评价：玩家参与度、引擎通用性、动态性、虚拟玩家评价、AI 对手智能性、AI 人类感
 - 5 个 MVP MOD：`tactical_duel`、`racing_strategy`、`debate_arena`、`crisis_coop`、`adversarial_interview`
 - 论文驱动的 Agent 认知循环：四类记忆、证据反思、情绪评价/再评价、情境人格激活、社会信念、持续计划、快慢有限理性与结果复盘
+- 连续决策倾向：每个合法动作得到可审计的吸引力、排名和主要动因；它只是动机压力，不是写死的候选答案，角色可在记忆、承诺或关系风险支持下作出有限理性的非最优选择
+- 行动后心理再评价：规则结果会立即回写压力、恐惧、愤怒、士气与不确定性，形成“受压—应对—部分恢复—再次受压”的轨迹
 - 慢变量人物动力学：竞争动机、关系承诺、秘密压力、身份失调、诱惑、社会施压、自我合理化与行动后果会跨回合改变偏好并推动人物弧光
 - 连续困境与延迟代价：MOD 可为合法动作声明价值、关系、承诺、即时收益与延迟风险；选择会形成可修复但不会自动清零的债务，后续回合再结算后果
 - 独立人物参考校准：用 38 个文学、戏剧、电影/剧本元数据和机构传记关键抉择案例检验通用机制；其中 11 个中文文学案例、4 个中文近现代小说案例，均不进入运行时动作池
@@ -18,7 +20,7 @@
 - 战略意图隔离：真实度、目标信念和识破风险仅写入所属 Agent 的引擎私有事件，玩家和其他 Agent 只能观察公开言行
 - 受约束的事实图谱：核心身世不可覆盖，自由发挥必须引用事实依据，可变事实保留修订链
 - 可选 Neo4j 持久化，存储 Agent、事实、揭露状态和 `SUPERSEDES` 关系
-- Agent 私有上下文隔离、分层提示、确定性记忆压缩与协作共享黑板
+- Agent 私有上下文隔离、分层提示、关键层优先的结构化压缩与协作共享黑板；被压缩的低优先级段仍保持合法 JSON 并可审计
 - OpenAI-compatible LLM Provider 接口，可快速切换云端或本地模型
 - 人类 vs Agent、Agent vs Agent、Agent 协作、人类-Agent 协作四种模式
 - FastAPI 控制后端与浏览器调试面板
@@ -147,7 +149,7 @@ uvicorn hva_engine.api:app --reload
 
 Docker 开发环境可用 `HVA_FACT_STORE=neo4j docker compose --profile neo4j up --build`。详细约束见 [事实图谱](docs/FACT_GRAPH.md)。
 
-运行评分 MVP-9 的多种子镜像基准（对抗模式会交换双方席位）：
+运行评分 MVP-10 的多种子镜像基准（对抗模式会交换双方席位）：
 
 ```bash
 python -m hva_engine.benchmark --seeds 25
@@ -169,7 +171,7 @@ python -m hva_engine.narrative_calibration
 4. **直播输入也是动作源**：弹幕与 Godot、Web 控制台共享同一校验链路。
 5. **用 MVP 数据升级架构**：评价低分对应明确的下一轮改造方向。
 
-详细内容见 [战略影响机制](docs/STRATEGIC_INFLUENCE.md)、[人物卡](docs/CHARACTER_CARDS.md)、[研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[叙事人物决策校准](docs/NARRATIVE_CHARACTER_CALIBRATION.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
+详细内容见 [MVP-10 窦娥单步 LLM 测试](docs/MVP10_DOU_E_LLM_TEST.md)、[战略影响机制](docs/STRATEGIC_INFLUENCE.md)、[人物卡](docs/CHARACTER_CARDS.md)、[研究驱动的人类感 Agent](docs/RESEARCH_HUMAN_LIKE_AGENTS.md)、[叙事人物决策校准](docs/NARRATIVE_CHARACTER_CALIBRATION.md)、[评价体系](docs/EVALUATION.md)、[架构说明](docs/ARCHITECTURE.md)、[逆风采访 MOD](docs/INTERVIEW_MOD.md)、[事实图谱](docs/FACT_GRAPH.md) 与 [LLM/上下文接入](docs/LLM_INTEGRATION.md)。
 
 ## 弹幕命令
 

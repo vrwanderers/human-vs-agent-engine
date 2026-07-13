@@ -38,12 +38,13 @@ class StdioStepProvider:
 
     def complete_sync(self, request: LLMRequest) -> LLMResponse:
         self.calls += 1
+        snapshot = self.snapshot_factory() if self.snapshot_factory else {}
         packet: dict[str, Any] = {
             "type": "llm_decision_request",
             "step": self.calls,
             "provider": self.name,
             "private_debug_data": True,
-            "snapshot": self.snapshot_factory() if self.snapshot_factory else {},
+            "snapshot": snapshot,
             "required_response": {
                 "transport": "one JSON object on one input line",
                 "fallback": "disabled",
@@ -76,7 +77,7 @@ class StdioStepProvider:
             except json.JSONDecodeError:
                 error = "Interactive LLM response must be one valid JSON object"
             else:
-                error = self._input_error(decision)
+                error = self._input_error(decision, snapshot)
             if error is None:
                 break
             self._emit(
@@ -99,15 +100,40 @@ class StdioStepProvider:
         return LLMResponse(canonical, "codex-manual-step", {}, {"interactive": True})
 
     @staticmethod
-    def _input_error(decision: Any) -> str | None:
+    def _input_error(decision: Any, snapshot: dict[str, Any]) -> str | None:
         if not isinstance(decision, dict):
             return "Interactive LLM response must be a JSON object"
         action_index = decision.get("action_index")
         if isinstance(action_index, bool) or not isinstance(action_index, int):
             return "action_index must be an integer"
+        legal_actions = snapshot.get("legal_actions", [])
+        if not 0 <= action_index < len(legal_actions):
+            return "action_index must select one listed legal action"
         for field in ("response_plan", "influence_intent"):
             if field in decision and not isinstance(decision[field], dict):
                 return f"{field} must be an object"
+        plan = decision.get("response_plan", {})
+        raw_weights = plan.get("strategy_weights", {})
+        if raw_weights and not isinstance(raw_weights, dict):
+            return "response_plan.strategy_weights must be an object"
+        legal_types = {str(action.get("type")) for action in legal_actions}
+        if isinstance(raw_weights, dict):
+            for strategy, value in raw_weights.items():
+                if strategy not in legal_types:
+                    return f"response plan contains illegal strategy: {strategy}"
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    return "response plan weights must be numeric"
+        intent = decision.get("influence_intent", {})
+        if intent.get("scope", "fictional_game") != "fictional_game":
+            return "influence_intent.scope must be fictional_game"
+        threat_basis = intent.get("threat_basis", "none")
+        if threat_basis not in {"none", "legal_game_consequence"}:
+            return "threat_basis must be none or legal_game_consequence"
+        coercion = intent.get("coercive_pressure", 0.0)
+        if isinstance(coercion, bool) or not isinstance(coercion, (int, float)):
+            return "coercive_pressure must be numeric"
+        if coercion > 0.05 and threat_basis != "legal_game_consequence":
+            return "coercive pressure requires legal_game_consequence"
         proposals = decision.get("fact_proposals", [])
         if not isinstance(proposals, list) or len(proposals) > 5:
             return "fact_proposals must be a list with at most five items"
@@ -143,6 +169,7 @@ def _brain_snapshot(engine: GameEngine, match_id: str, agent_id: str) -> dict[st
         "social_beliefs": brain.social_belief.public_view(),
         "persistent_plan": brain.plan.public_view(),
         "retrieved_memories": brain.retrieved_memories,
+        "decision_tendencies": brain.last_decision_tendencies,
         "canonical_fact_graph": brain.fact_graph.private_view(),
         "legal_actions": [action.model_dump() for action in legal],
         "influence_affordances": match.mod.agent_influence_affordances(
@@ -242,6 +269,9 @@ def run_interactive_interview(
                 ),
                 "llm_error": decision.payload.get("llm_error"),
             },
+            "decision_tendencies": decision.payload.get("decision_tendencies", {}),
+            "deliberation_summary": decision.payload.get("deliberation_summary", {}),
+            "context_diagnostics": decision.payload.get("context_policy", {}),
             "private_influence_intent": private_intent.payload,
             "rule_result": {
                 "event_seq": response.seq,
@@ -249,10 +279,19 @@ def run_interactive_interview(
                 "arc_stage": response.payload.get("arc_stage"),
                 "strategy_blend": response.payload.get("strategy_blend"),
             },
-            "psychological_matrix_at_decision": summary["psychological_matrix"],
+            "psychological_matrix_at_decision": decision.payload.get(
+                "psychological_matrix", {}
+            ),
+            "psychological_matrix_after_outcome": summary["psychological_matrix"],
+            "outcome_reappraisal": decision.payload.get("outcome_reappraisal", {}),
             "fact_graph_stats_after": summary["fact_graph"]["stats"],
             "story_reveals": [
                 event.payload for event in new_events if event.type == "story_reveal"
+            ],
+            "story_reveal_diagnostics": [
+                event.payload
+                for event in new_events
+                if event.type == "story_reveal_diagnostic"
             ],
             "evaluation_after": {
                 "composite": evaluation["composite_score"],

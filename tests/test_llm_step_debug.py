@@ -51,6 +51,11 @@ def test_stdio_step_debug_requires_six_llm_answers_without_fallback() -> None:
     assert all(
         step["parsed_decision"]["source"] == "llm" for step in report["steps"]
     )
+    assert all(step["context_diagnostics"] for step in report["steps"])
+    assert all(
+        not step["context_diagnostics"]["critical_sections_truncated"]
+        for step in report["steps"]
+    )
 
 
 def test_stdio_step_debug_retries_a_malformed_fact_proposal() -> None:

@@ -55,7 +55,7 @@ def _clamp(value: float) -> float:
 
 
 class MatchEvaluator:
-    """MVP-9 evaluator: adds bounded, private strategic-influence diagnostics."""
+    """MVP-10 evaluator with outcome reappraisal and bounded decision diagnostics."""
 
     def evaluate(
         self,
@@ -266,7 +266,7 @@ class MatchEvaluator:
             "strategic_influence": strategic_influence_profile,
         }
         return {
-            "version": "mvp-9",
+            "version": "mvp-10",
             "valid_for_comparison": rules_valid,
             "composite_score": composite,
             "weights": weights,
@@ -447,6 +447,8 @@ class MatchEvaluator:
                 "identity_continuity": 0.0,
                 "psychological_modeling": 0.0,
                 "psychological_dynamics": 0.0,
+                "outcome_reappraisal": 0.0,
+                "emotional_directionality": 0.0,
                 "opponent_modeling": 0.0,
                 "intention_persistence": 0.0,
                 "bounded_rationality": 0.0,
@@ -490,30 +492,82 @@ class MatchEvaluator:
             bool(event.payload.get("opponent_model")) for event in decisions
         ) / len(decisions)
 
-        psychology_deltas: list[float] = []
+        between_psychology_deltas: list[float] = []
+        outcome_psychology_deltas: list[float] = []
+        signed_psychology_deltas: dict[str, list[float]] = {}
+        outcome_reappraisal_count = 0
         intention_pairs = 0
         intention_same = 0
         for agent_id in agents:
             agent_decisions = [event for event in decisions if event.actor_id == agent_id]
+            for event in agent_decisions:
+                before = event.payload.get("psychological_matrix", {})
+                after = event.payload.get("psychological_matrix_after_outcome", {})
+                shared_keys = set(before) & set(after)
+                if shared_keys:
+                    outcome_reappraisal_count += 1
+                    outcome_psychology_deltas.append(
+                        sum(
+                            abs(float(after[key]) - float(before[key]))
+                            for key in shared_keys
+                        )
+                        / len(shared_keys)
+                    )
+                    for key in shared_keys:
+                        signed_psychology_deltas.setdefault(key, []).append(
+                            float(after[key]) - float(before[key])
+                        )
             for previous, current in zip(agent_decisions, agent_decisions[1:], strict=False):
                 previous_matrix = previous.payload.get("psychological_matrix", {})
                 current_matrix = current.payload.get("psychological_matrix", {})
                 shared_keys = set(previous_matrix) & set(current_matrix)
                 if shared_keys:
-                    psychology_deltas.append(
+                    between_psychology_deltas.append(
                         sum(
                             abs(float(current_matrix[key]) - float(previous_matrix[key]))
                             for key in shared_keys
                         )
                         / len(shared_keys)
                     )
+                    for key in shared_keys:
+                        signed_psychology_deltas.setdefault(key, []).append(
+                            float(current_matrix[key]) - float(previous_matrix[key])
+                        )
                 previous_intention = previous.payload.get("intention")
                 current_intention = current.payload.get("intention")
                 if previous_intention and current_intention:
                     intention_pairs += 1
                     intention_same += previous_intention == current_intention
+        between_reactivity = _clamp(
+            0.45
+            if not between_psychology_deltas
+            else sum(between_psychology_deltas)
+            / len(between_psychology_deltas)
+            / 0.07
+        )
+        outcome_reappraisal = _clamp(
+            outcome_reappraisal_count
+            / len(decisions)
+            * (
+                0.0
+                if not outcome_psychology_deltas
+                else sum(outcome_psychology_deltas)
+                / len(outcome_psychology_deltas)
+                / 0.025
+            )
+        )
+        emotional_directionality = _clamp(
+            sum(
+                any(value > 0.003 for value in values)
+                and any(value < -0.003 for value in values)
+                for values in signed_psychology_deltas.values()
+            )
+            / max(1, len(signed_psychology_deltas))
+        )
         psychological_dynamics = _clamp(
-            0.45 if not psychology_deltas else sum(psychology_deltas) / len(psychology_deltas) * 6
+            0.45 * between_reactivity
+            + 0.35 * outcome_reappraisal
+            + 0.20 * emotional_directionality
         )
         persistence_rate = intention_same / max(1, intention_pairs)
         intention_persistence = _clamp(
@@ -714,6 +768,8 @@ class MatchEvaluator:
             "identity_continuity": _clamp(identity_continuity),
             "psychological_modeling": _clamp(psychological_modeling),
             "psychological_dynamics": psychological_dynamics,
+            "outcome_reappraisal": outcome_reappraisal,
+            "emotional_directionality": emotional_directionality,
             "opponent_modeling": _clamp(opponent_modeling),
             "intention_persistence": intention_persistence,
             "bounded_rationality": bounded_rationality,

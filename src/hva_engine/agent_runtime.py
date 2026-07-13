@@ -73,6 +73,9 @@ class AgentBrain:
     decision_mode: DecisionMode = DecisionMode.DELIBERATIVE
     retrieved_memories: list[dict[str, Any]] = field(default_factory=list)
     activated_traits: dict[str, Any] = field(default_factory=dict)
+    last_decision_tendencies: dict[str, Any] = field(default_factory=dict)
+    last_outcome_reappraisal: dict[str, Any] = field(default_factory=dict)
+    last_story_reveal_diagnostic: dict[str, Any] = field(default_factory=dict)
     narrative_dynamics: NarrativeDynamics | None = None
     decisions: int = 0
     last_context: ContextPacket | None = None
@@ -286,7 +289,7 @@ class AgentBrain:
             "opponent_model": self.opponent_model,
             "social_belief": self.social_belief.public_view(),
             "appraisal": self.last_appraisal.public_view(),
-            "plan": self.plan.public_view(),
+            "plan": self._plan_context(),
             "activated_traits": self.activated_traits,
             "decision_mode": self.decision_mode.value,
             "narrative_dynamics": self.narrative_dynamics.public_view(),
@@ -347,31 +350,6 @@ class AgentBrain:
             **self.narrative_dynamics.public_view(),
             "legal_action_affordances": narrative_affordances,
         }
-        self.last_context = ContextComposer().compose(
-            match_id=self._match_id,
-            agent_id=self.player_id,
-            role=self.role,
-            mod=mod,
-            state=state,
-            world_model=self.world_model,
-            memory=self.retrieved_memories,
-            legal_actions=legal,
-            shared_facts=self._shared_facts,
-            persona=self.profile.public_view(),
-            identity=self.identity.private_view(),
-            cognitive_state=self.cognition.public_view(),
-            opponent_model=self.opponent_model,
-            behavior_policy=self.behavior_policy.public_view(),
-            fact_graph=self.fact_graph.private_view(),
-            appraisal=self.last_appraisal.public_view() if self.last_appraisal else {},
-            reflections=[item.public_view() for item in self.memory_system.reflections[-4:]],
-            current_plan=self.plan.public_view(),
-            social_beliefs=self.social_belief.public_view(),
-            activated_traits=self.activated_traits,
-            decision_mode=self.decision_mode.value,
-            narrative_dynamics=narrative_context,
-            influence_affordances=influence_affordances,
-        )
         baseline_action = mod.agent_action(state, self.player_id, legal, rng)
         learned: dict[str, list[float]] = {}
         for item in self.memory:
@@ -406,6 +384,35 @@ class AgentBrain:
             character_state_biases=combined_state_biases,
             cooperative="coop" in self.role,
             rng=rng,
+        )
+        self.last_decision_tendencies = self._decision_tendencies(
+            legal, utilities, components
+        )
+        self.last_context = ContextComposer().compose(
+            match_id=self._match_id,
+            agent_id=self.player_id,
+            role=self.role,
+            mod=mod,
+            state=state,
+            world_model=self.world_model,
+            memory=self.retrieved_memories,
+            legal_actions=legal,
+            shared_facts=self._shared_facts,
+            persona=self.profile.public_view(),
+            identity=self.identity.private_view(),
+            cognitive_state=self.cognition.public_view(),
+            opponent_model=self.opponent_model,
+            behavior_policy=self.behavior_policy.public_view(),
+            fact_graph=self.fact_graph.private_view(),
+            appraisal=self.last_appraisal.public_view() if self.last_appraisal else {},
+            reflections=[item.public_view() for item in self.memory_system.reflections[-4:]],
+            current_plan=self._plan_context(),
+            social_beliefs=self.social_belief.public_view(),
+            activated_traits=self.activated_traits,
+            decision_mode=self.decision_mode.value,
+            narrative_dynamics=narrative_context,
+            influence_affordances=influence_affordances,
+            decision_tendencies=self.last_decision_tendencies,
         )
         llm_decision = None
         llm_error: dict[str, str] | None = None
@@ -562,7 +569,8 @@ class AgentBrain:
             "opponent_model": self.opponent_model,
             "social_beliefs": self.social_belief.public_view(),
             "appraisal": self.last_appraisal.public_view() if self.last_appraisal else {},
-            "current_plan": self.plan.public_view(),
+            "current_plan": self._plan_context(),
+            "decision_tendencies": self.last_decision_tendencies,
             "activated_traits": self.activated_traits,
             "decision_mode": self.decision_mode.value,
             "narrative_dynamics": self.narrative_dynamics.public_view(),
@@ -806,6 +814,82 @@ class AgentBrain:
             profile=self.profile,
             narrative_affordance=trace.get("narrative_action_affordance", {}),
         )
+        self._integrate_outcome(
+            action_type=action.type,
+            score_delta=score_after - score_before,
+            response_plan=trace.get("response_plan", {}),
+        )
+
+    def _integrate_outcome(
+        self,
+        *,
+        action_type: str,
+        score_delta: float,
+        response_plan: dict[str, Any],
+    ) -> None:
+        before = self.cognition.psychology_view()
+        raw_weights = response_plan.get("strategy_weights", {})
+        weights = raw_weights if isinstance(raw_weights, dict) else {}
+
+        def weight(name: str) -> float:
+            try:
+                return max(0.0, min(1.0, float(weights.get(name, 0.0))))
+            except (TypeError, ValueError):
+                return 0.0
+
+        direct_disclosure = min(
+            1.0,
+            weight("answer_honestly")
+            + weight("admit_uncertainty")
+            + 0.65 * weight("invoke_memory"),
+        )
+        boundary = weight("set_boundary")
+        counterattack = weight("counterattack")
+        outcome = max(-1.0, min(1.0, score_delta))
+        relief = max(0.0, outcome)
+        strain = max(0.0, -outcome)
+        adjustments = {
+            "confidence": (
+                0.10 * outcome
+                + 0.025 * boundary
+                - 0.02 * weight("admit_uncertainty")
+            ),
+            "morale": 0.08 * outcome + 0.02 * direct_disclosure,
+            "stress": (
+                -0.10 * relief
+                + 0.12 * strain
+                - 0.06 * direct_disclosure
+                + 0.025 * counterattack
+            ),
+            "frustration": -0.08 * relief + 0.10 * strain,
+            "anger": (
+                -0.08 * weight("answer_honestly")
+                - 0.05 * weight("admit_uncertainty")
+                - 0.04 * weight("invoke_memory")
+                + 0.055 * counterattack
+                + 0.08 * strain
+            ),
+            "fear": -0.05 * boundary - 0.025 * direct_disclosure + 0.06 * strain,
+            "arousal": -0.04 * direct_disclosure + 0.05 * counterattack,
+            "uncertainty": -0.05 * relief + 0.025 * weight("admit_uncertainty"),
+        }
+        self.cognition.apply_adjustments(adjustments)
+        self.last_outcome_reappraisal = {
+            "action_type": action_type,
+            "score_delta": round(score_delta, 3),
+            "drivers": {
+                "direct_disclosure": round(direct_disclosure, 3),
+                "boundary": round(boundary, 3),
+                "counterattack": round(counterattack, 3),
+                "relief": round(relief, 3),
+                "strain": round(strain, 3),
+            },
+            "adjustments": {
+                key: round(value, 3) for key, value in adjustments.items()
+            },
+            "before": before,
+            "after": self.cognition.psychology_view(),
+        }
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -818,7 +902,9 @@ class AgentBrain:
             "opponent_model": self.opponent_model,
             "social_beliefs": self.social_belief.public_view(),
             "appraisal": self.last_appraisal.public_view() if self.last_appraisal else None,
-            "current_plan": self.plan.public_view(),
+            "current_plan": self._plan_context(),
+            "decision_tendencies": self.last_decision_tendencies,
+            "last_outcome_reappraisal": self.last_outcome_reappraisal,
             "activated_traits": self.activated_traits,
             "decision_mode": self.decision_mode.value,
             "narrative_dynamics": (
@@ -874,6 +960,37 @@ class AgentBrain:
         fact_id_to_title = {
             fact_id: title for title, fact_id in self.fact_graph.formative_memory_fact_ids.items()
         }
+        eligibility = {
+            title: {"eligible": eligible, "threshold": trigger}
+            for title, eligible, trigger in thresholds
+        }
+        requested_statuses: list[dict[str, Any]] = []
+        for fact_id in requested_fact_ids or []:
+            title = fact_id_to_title.get(fact_id)
+            if title is None:
+                requested_statuses.append(
+                    {
+                        "fact_id": fact_id,
+                        "status": "rejected_unknown_or_non_formative_fact",
+                    }
+                )
+                continue
+            if title in self._revealed_story_titles:
+                status = "already_revealed"
+            elif eligibility[title]["eligible"]:
+                status = "eligible"
+            else:
+                status = "deferred_by_story_pacing"
+            requested_statuses.append(
+                {
+                    "fact_id": fact_id,
+                    "title": title,
+                    "status": status,
+                    "eligibility_threshold": eligibility[title]["threshold"],
+                    "decision_count": self.decisions,
+                    "terminal": terminal,
+                }
+            )
         requested_titles = [
             fact_id_to_title[fact_id]
             for fact_id in requested_fact_ids or []
@@ -893,7 +1010,7 @@ class AgentBrain:
             self._revealed_story_titles.add(title)
             supporting_fact_id = self.fact_graph.formative_memory_fact_ids[title]
             self.fact_graph.reveal(supporting_fact_id)
-            return {
+            reveal = {
                 "story_stage": len(self._revealed_story_titles),
                 "story_progress": round(
                     len(self._revealed_story_titles) / max(1, len(memories)), 3
@@ -905,6 +1022,24 @@ class AgentBrain:
                 "disclosure": self.identity.disclosure,
                 "psychological_snapshot": self.cognition.psychology_view(),
             }
+            self.last_story_reveal_diagnostic = {
+                "outcome": "revealed",
+                "revealed_fact_id": supporting_fact_id,
+                "revealed_title": title,
+                "trigger": trigger,
+                "requested": requested_statuses,
+            }
+            return reveal
+        self.last_story_reveal_diagnostic = {
+            "outcome": (
+                "deferred_or_rejected"
+                if requested_statuses
+                else "no_eligible_unrevealed_story"
+            ),
+            "requested": requested_statuses,
+            "decision_count": self.decisions,
+            "terminal": terminal,
+        }
         return None
 
     def _update_opponent_model(self, events: list[GameEvent]) -> None:
@@ -949,6 +1084,67 @@ class AgentBrain:
         else:
             self.cognition.intention = target
             self.cognition.intention_age = 0
+
+    def _plan_context(self) -> dict[str, Any]:
+        strategic_goal = self.plan.goal
+        tactical_intention = self.cognition.intention
+        return {
+            **self.plan.public_view(),
+            "strategic_goal": strategic_goal,
+            "current_tactical_intention": tactical_intention,
+            "alignment": (
+                "aligned"
+                if strategic_goal == tactical_intention
+                else "temporary_tactical_deviation"
+            ),
+            "semantics": (
+                "The strategic goal persists across turns; the tactical intention may change "
+                "with coping pressure without automatically replacing that goal."
+            ),
+        }
+
+    def _decision_tendencies(
+        self,
+        legal: list[Action],
+        utilities: list[float],
+        components: list[dict[str, float]],
+    ) -> dict[str, Any]:
+        peak = max(utilities)
+        weights = [math.exp((value - peak) / 0.35) for value in utilities]
+        total = sum(weights)
+        ranks = {
+            index: rank
+            for rank, index in enumerate(
+                sorted(range(len(utilities)), key=utilities.__getitem__, reverse=True),
+                start=1,
+            )
+        }
+        actions: list[dict[str, Any]] = []
+        for index, action in enumerate(legal):
+            drivers = sorted(
+                components[index].items(), key=lambda item: abs(item[1]), reverse=True
+            )
+            actions.append(
+                {
+                    "action_index": index,
+                    "action_type": action.type,
+                    "attraction": round(weights[index] / total, 3),
+                    "rank": ranks[index],
+                    "relative_to_peak": round(utilities[index] - peak, 3),
+                    "dominant_drivers": [
+                        {"name": name, "effect": round(value, 3)}
+                        for name, value in drivers[:3]
+                        if abs(value) >= 0.02
+                    ],
+                }
+            )
+        return {
+            "semantics": "fallible_motivational_attraction_not_action_command",
+            "decision_mode": self.decision_mode.value,
+            "strategic_goal": self.plan.goal,
+            "tactical_intention": self.cognition.intention,
+            "actions": actions,
+        }
 
     def _prediction(self, mod: GameMod, action: Action) -> dict[str, Any]:
         expectations = {

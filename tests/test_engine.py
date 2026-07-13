@@ -115,11 +115,11 @@ def test_cross_match_evaluation_groups_by_mod_and_mode() -> None:
     assert summary["overall"]["composite_sd"] >= 0
 
 
-def test_agent_only_engagement_is_not_applicable_in_v9() -> None:
+def test_agent_only_engagement_is_not_applicable_in_v10() -> None:
     engine = build_default_engine()
     view = engine.create_match("debate_arena", seed=1, mode=MatchMode.AGENT_VS_AGENT)
     evaluation = engine.evaluation(view.id)
-    assert evaluation["version"] == "mvp-9"
+    assert evaluation["version"] == "mvp-10"
     assert evaluation["dimensions"]["player_engagement"] is None
     assert evaluation["valid_for_comparison"] is True
 
@@ -219,6 +219,9 @@ def test_adversarial_interview_drives_psychology_identity_and_character_arc() ->
     decisions = [event for event in view.events if event.type == "agent_decision"]
     assert len(questions) == len(responses) == len(decisions) == 6
     assert all(event.payload["world_model"]["mod_psychological_signals"] for event in decisions)
+    assert all(event.payload["decision_tendencies"]["actions"] for event in decisions)
+    assert all(event.payload["outcome_reappraisal"]["after"] for event in decisions)
+    assert all(event.payload["psychological_matrix_after_outcome"] for event in decisions)
     stress_values = [event.payload["psychological_matrix"]["stress"] for event in decisions]
     assert max(stress_values) - min(stress_values) > 0.05
     assert all(
@@ -234,6 +237,9 @@ def test_adversarial_interview_drives_psychology_identity_and_character_arc() ->
     assert assessment["components"]["psychological_reactivity"] > 0.5
     assert assessment["components"]["strategy_blend_complexity"] > 0.5
     assert assessment["components"]["character_arc"] > 0.4
+    human_likeness = evaluation["ai_capability_profile"]["human_likeness_components"]
+    assert human_likeness["outcome_reappraisal"] > 0
+    assert human_likeness["psychological_dynamics"] > 0
 
 
 def test_interview_score_rejects_flat_repetitive_guarded_agent() -> None:

@@ -35,6 +35,8 @@ MOD 状态记录 `pressure / composure / authenticity / trust / coherence / vuln
 
 这两层用途不同：MOD 状态用于剧情规则和跨对局评分；通用心理矩阵用于人格化决策、上下文和跨 MOD 比较。
 
+MVP-10 在规则结果产生后增加一次即时再评价。有效披露可降低压力、愤怒和恐惧，设边界可降低恐惧并恢复少量信心，反击则可能让唤醒和愤怒继续滞留。下一轮问题仍可重新抬高压力，因此轨迹不是单调增长，也不会因为一句成功回答把情绪全部清零。`agent_decision` 同时保留 `psychological_matrix`、`psychological_matrix_after_outcome` 与 `outcome_reappraisal`，供评分和单步调试复核。
+
 ## 连续困境与延迟代价
 
 MVP-7 为七类合法策略声明同一套叙事可供性：`commitment_impacts / identity_alignment / relationship_effect / immediate_reward / delayed_risk / repair_potential / irreversibility`。例如，引用私人记忆可能同时维护真实感、增进关系并伤害隐私承诺；反击能立刻夺回尊严，却可能在两轮后以信任或一致性损失成熟。

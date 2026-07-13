@@ -342,11 +342,26 @@ class GameEngine:
                 match.mod.scores(match.state).get(actor_id, 0.0),
                 trace,
             )
-            if reveal := brain.maybe_reveal_story(
+            decision_event.payload["psychological_matrix_after_outcome"] = (
+                brain.cognition.psychology_view()
+            )
+            decision_event.payload["outcome_reappraisal"] = brain.last_outcome_reappraisal
+            requested_reveals = trace.get("response_plan", {}).get(
+                "reveal_fact_ids", []
+            )
+            reveal = brain.maybe_reveal_story(
                 match.status == MatchStatus.FINISHED,
-                requested_fact_ids=trace.get("response_plan", {}).get("reveal_fact_ids", []),
-            ):
+                requested_fact_ids=requested_reveals,
+            )
+            if reveal:
                 match.add_event("story_reveal", actor_id, **reveal)
+            if requested_reveals:
+                match.add_event(
+                    "story_reveal_diagnostic",
+                    actor_id,
+                    visibility=EventVisibility.ENGINE_PRIVATE,
+                    **brain.last_story_reveal_diagnostic,
+                )
             guard += 1
             if guard > 100:
                 raise EngineError("Agent turn loop exceeded safety limit")
