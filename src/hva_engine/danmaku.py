@@ -39,6 +39,9 @@ ALIASES = {
     "情感": "emotion",
     "rebuttal": "rebuttal",
     "反驳": "rebuttal",
+    "ask": "ask",
+    "采访": "ask",
+    "提问": "ask",
 }
 
 
@@ -61,7 +64,12 @@ def dispatch_danmaku(
     if command is None:
         raise EngineError("Danmaku is not a recognized command")
     legal = match.mod.legal_actions(match.state, match.human_player_id)
-    candidates = [action for action in legal if action.type == command.action_type]
+    candidates = [
+        action
+        for action in legal
+        if action.type == command.action_type
+        or (command.action_type == "ask" and action.type.startswith("ask_"))
+    ]
     if command.argument:
         candidates = [
             action

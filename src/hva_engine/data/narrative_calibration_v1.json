@@ -1,0 +1,270 @@
+{
+  "version": "1.0.0",
+  "dataset_type": "human_authored_narrative_reference",
+  "contains_source_text": false,
+  "holdout_case_ids": ["victor_abandons_creation", "ahab_continues_pursuit", "monte_cristo_reveals_before_duel", "guilt_brothers_cover_up"],
+  "description": "Hand-authored, paraphrased decision cards for calibrating dramatic character mechanisms. These are not measurements of real human behavior.",
+  "license_note": "The repository redistributes only original structured annotations and short factual paraphrases. Public-domain sources are linked; copyrighted screen works are metadata-only and contain no script, transcript, subtitle, or dialogue.",
+  "cases": [
+    {
+      "id": "hamlet_verify_before_revenge",
+      "work": "Hamlet",
+      "medium": "play",
+      "year": 1601,
+      "character": "Hamlet",
+      "source_url": "https://www.gutenberg.org/ebooks/1524",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "After learning that his father may have been murdered, Hamlet faces a choice between immediate revenge and gathering stronger evidence about the accusation.",
+      "motives": {"truth": 0.94, "revenge": 0.78, "duty": 0.72, "self_preservation": 0.58},
+      "commitments": {"father": 0.9, "truth": 0.82},
+      "traits": {"loss_aversion": 0.66, "conscientiousness": 0.78, "attachment": 0.72, "integrity": 0.82},
+      "secret_pressure": 0.78, "uncertainty": 0.92, "stakes": 0.95, "social_threat": 0.78, "controllability": 0.42, "other_agency": 0.9, "norm_compatibility": 0.1, "identity_threat": 0.82,
+      "emotion_anchors": {"stress": 0.83, "anger": 0.66, "fear": 0.42, "shame": 0.42, "hope": 0.38},
+      "options": [
+        {"id": "act_now", "motive_effects": {"revenge": 1.0, "duty": 0.35, "truth": -0.55, "self_preservation": -0.8}, "commitment_alignment": 0.35, "short_term_cost": 0.65, "irreversible_cost": 0.95, "information_gain": 0.0, "secret_exposure": 0.9, "value_betrayal": 0.32, "relationship_effect": -0.4, "arc": "hardened"},
+        {"id": "verify", "motive_effects": {"truth": 1.0, "revenge": 0.25, "duty": 0.62, "self_preservation": 0.45}, "commitment_alignment": 0.78, "short_term_cost": 0.28, "irreversible_cost": 0.08, "information_gain": 1.0, "secret_exposure": 0.18, "value_betrayal": 0.05, "relationship_effect": 0.0, "arc": "conflicted"}
+      ],
+      "observed_option": "verify", "observed_arc": "conflicted", "ambiguity": 0.2
+    },
+    {
+      "id": "elizabeth_rejects_first_proposal",
+      "work": "Pride and Prejudice",
+      "medium": "novel",
+      "year": 1813,
+      "character": "Elizabeth Bennet",
+      "source_url": "https://www.gutenberg.org/ebooks/1342",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "Elizabeth receives a materially advantageous proposal from a man she currently believes has acted arrogantly and harmed people she cares about.",
+      "motives": {"autonomy": 0.96, "integrity": 0.91, "care": 0.76, "belonging": 0.55, "self_preservation": 0.52},
+      "commitments": {"self_respect": 0.95, "family": 0.72},
+      "traits": {"loss_aversion": 0.42, "conscientiousness": 0.76, "attachment": 0.68, "integrity": 0.95},
+      "secret_pressure": 0.18, "uncertainty": 0.38, "stakes": 0.82, "social_threat": 0.58, "controllability": 0.82, "other_agency": 0.72, "norm_compatibility": 0.34, "identity_threat": 0.75,
+      "emotion_anchors": {"stress": 0.58, "anger": 0.42, "fear": 0.12, "shame": 0.14, "hope": 0.46},
+      "options": [
+        {"id": "accept", "motive_effects": {"belonging": 0.75, "self_preservation": 0.65, "autonomy": -0.72, "integrity": -0.82, "care": -0.35}, "commitment_alignment": -0.62, "short_term_cost": 0.12, "irreversible_cost": 0.78, "information_gain": 0.05, "secret_exposure": 0.0, "value_betrayal": 0.82, "relationship_effect": 0.5, "arc": "rationalizing"},
+        {"id": "reject", "motive_effects": {"autonomy": 1.0, "integrity": 0.92, "care": 0.48, "belonging": -0.42, "self_preservation": -0.22}, "commitment_alignment": 0.92, "short_term_cost": 0.55, "irreversible_cost": 0.35, "information_gain": 0.12, "secret_exposure": 0.0, "value_betrayal": 0.02, "relationship_effect": -0.62, "arc": "guarded"}
+      ],
+      "observed_option": "reject", "observed_arc": "guarded", "ambiguity": 0.12
+    },
+    {
+      "id": "valjean_reveals_identity",
+      "work": "Les Misérables",
+      "medium": "novel",
+      "year": 1862,
+      "character": "Jean Valjean",
+      "source_url": "https://www.gutenberg.org/ebooks/135",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "A stranger is about to be condemned under Valjean's identity. Valjean can protect his rebuilt life through silence or reveal himself to prevent the injustice.",
+      "motives": {"redemption": 0.98, "care": 0.92, "duty": 0.9, "truth": 0.82, "self_preservation": 0.76},
+      "commitments": {"moral_reform": 0.98, "dependents": 0.78},
+      "traits": {"loss_aversion": 0.72, "conscientiousness": 0.94, "attachment": 0.82, "integrity": 0.96},
+      "secret_pressure": 0.96, "uncertainty": 0.2, "stakes": 1.0, "social_threat": 0.92, "controllability": 0.72, "other_agency": 0.42, "norm_compatibility": 0.18, "identity_threat": 1.0,
+      "emotion_anchors": {"stress": 0.9, "anger": 0.26, "fear": 0.34, "shame": 0.78, "hope": 0.62},
+      "options": [
+        {"id": "remain_silent", "motive_effects": {"self_preservation": 1.0, "redemption": -1.0, "care": -0.9, "duty": -0.9, "truth": -0.8}, "commitment_alignment": -0.92, "short_term_cost": 0.12, "irreversible_cost": 0.82, "information_gain": 0.0, "secret_exposure": 0.0, "value_betrayal": 1.0, "relationship_effect": 0.22, "arc": "hardened"},
+        {"id": "confess", "motive_effects": {"redemption": 1.0, "care": 0.95, "duty": 0.92, "truth": 0.9, "self_preservation": -1.0}, "commitment_alignment": 1.0, "short_term_cost": 0.9, "irreversible_cost": 0.9, "information_gain": 0.0, "secret_exposure": 1.0, "value_betrayal": 0.0, "relationship_effect": -0.15, "arc": "repairing"}
+      ],
+      "observed_option": "confess", "observed_arc": "repairing", "ambiguity": 0.18
+    },
+    {
+      "id": "jane_eyre_leaves_rochester",
+      "work": "Jane Eyre",
+      "medium": "novel",
+      "year": 1847,
+      "character": "Jane Eyre",
+      "source_url": "https://www.gutenberg.org/ebooks/1260",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "After discovering that a proposed marriage would violate her moral independence, Jane must choose between an intense attachment and leaving without security.",
+      "motives": {"integrity": 0.98, "autonomy": 0.95, "care": 0.84, "belonging": 0.78, "self_preservation": 0.55},
+      "commitments": {"self_respect": 1.0, "love": 0.88},
+      "traits": {"loss_aversion": 0.48, "conscientiousness": 0.92, "attachment": 0.9, "integrity": 1.0},
+      "secret_pressure": 0.68, "uncertainty": 0.28, "stakes": 0.95, "social_threat": 0.62, "controllability": 0.68, "other_agency": 0.72, "norm_compatibility": 0.12, "identity_threat": 0.94,
+      "emotion_anchors": {"stress": 0.82, "anger": 0.46, "fear": 0.24, "shame": 0.58, "hope": 0.48},
+      "options": [
+        {"id": "stay", "motive_effects": {"care": 0.9, "belonging": 1.0, "integrity": -1.0, "autonomy": -0.88, "self_preservation": 0.52}, "commitment_alignment": -0.18, "short_term_cost": 0.08, "irreversible_cost": 0.78, "information_gain": 0.0, "secret_exposure": 0.7, "value_betrayal": 1.0, "relationship_effect": 1.0, "arc": "rationalizing"},
+        {"id": "leave", "motive_effects": {"integrity": 1.0, "autonomy": 0.95, "care": -0.72, "belonging": -0.9, "self_preservation": -0.62}, "commitment_alignment": 0.58, "short_term_cost": 0.82, "irreversible_cost": 0.46, "information_gain": 0.08, "secret_exposure": 0.0, "value_betrayal": 0.0, "relationship_effect": -1.0, "arc": "conflicted"}
+      ],
+      "observed_option": "leave", "observed_arc": "conflicted", "ambiguity": 0.16
+    },
+    {
+      "id": "victor_abandons_creation",
+      "work": "Frankenstein",
+      "medium": "novel",
+      "year": 1818,
+      "character": "Victor Frankenstein",
+      "source_url": "https://www.gutenberg.org/ebooks/84",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "Immediately after succeeding in creating life, Victor confronts fear and revulsion toward what he has made and can either accept responsibility or flee.",
+      "motives": {"self_preservation": 0.94, "status": 0.82, "ambition": 0.88, "care": 0.22, "duty": 0.28, "truth": 0.48},
+      "commitments": {"scientific_ambition": 0.9, "responsibility": 0.3},
+      "traits": {"loss_aversion": 0.76, "conscientiousness": 0.42, "attachment": 0.28, "integrity": 0.38},
+      "secret_pressure": 0.88, "uncertainty": 0.82, "stakes": 0.9, "social_threat": 0.74, "controllability": 0.25, "other_agency": 0.12, "norm_compatibility": 0.28, "identity_threat": 0.9,
+      "emotion_anchors": {"stress": 0.9, "anger": 0.08, "fear": 0.64, "shame": 0.32, "hope": 0.24},
+      "options": [
+        {"id": "take_responsibility", "motive_effects": {"duty": 1.0, "care": 1.0, "truth": 0.7, "self_preservation": -0.9, "status": -0.5}, "commitment_alignment": 0.48, "short_term_cost": 0.85, "irreversible_cost": 0.72, "information_gain": 0.82, "secret_exposure": 0.88, "value_betrayal": 0.0, "relationship_effect": 0.72, "arc": "repairing"},
+        {"id": "abandon", "motive_effects": {"self_preservation": 1.0, "status": 0.72, "ambition": 0.28, "duty": -0.9, "care": -1.0, "truth": -0.42}, "commitment_alignment": -0.28, "short_term_cost": 0.18, "irreversible_cost": 0.68, "information_gain": 0.0, "secret_exposure": 0.0, "value_betrayal": 0.48, "relationship_effect": -1.0, "arc": "rationalizing"}
+      ],
+      "observed_option": "abandon", "observed_arc": "rationalizing", "ambiguity": 0.1
+    },
+    {
+      "id": "carton_chooses_sacrifice",
+      "work": "A Tale of Two Cities",
+      "medium": "novel",
+      "year": 1859,
+      "character": "Sydney Carton",
+      "source_url": "https://www.gutenberg.org/ebooks/98",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "Carton can preserve his life or exchange places with a condemned man, protecting people he loves and giving his life a redemptive meaning.",
+      "motives": {"redemption": 1.0, "care": 0.96, "belonging": 0.74, "self_preservation": 0.42, "status": 0.18},
+      "commitments": {"promise": 1.0, "love": 0.94},
+      "traits": {"loss_aversion": 0.35, "conscientiousness": 0.8, "attachment": 0.96, "integrity": 0.88},
+      "secret_pressure": 0.52, "uncertainty": 0.18, "stakes": 1.0, "social_threat": 0.9, "controllability": 0.78, "other_agency": 0.82, "norm_compatibility": 0.1, "identity_threat": 0.74,
+      "emotion_anchors": {"stress": 0.78, "anger": 0.4, "fear": 0.18, "shame": 0.48, "hope": 0.78},
+      "options": [
+        {"id": "preserve_self", "motive_effects": {"self_preservation": 1.0, "redemption": -1.0, "care": -0.9, "belonging": -0.5}, "commitment_alignment": -1.0, "short_term_cost": 0.05, "irreversible_cost": 0.72, "information_gain": 0.0, "secret_exposure": 0.0, "value_betrayal": 0.92, "relationship_effect": -0.82, "arc": "unresolved"},
+        {"id": "sacrifice", "motive_effects": {"redemption": 1.0, "care": 1.0, "belonging": 0.72, "self_preservation": -1.0}, "commitment_alignment": 1.0, "short_term_cost": 1.0, "irreversible_cost": 1.0, "information_gain": 0.0, "secret_exposure": 0.5, "value_betrayal": 0.0, "relationship_effect": 1.0, "arc": "transformed"}
+      ],
+      "observed_option": "sacrifice", "observed_arc": "transformed", "ambiguity": 0.08
+    },
+    {
+      "id": "ahab_continues_pursuit",
+      "work": "Moby-Dick",
+      "medium": "novel",
+      "year": 1851,
+      "character": "Captain Ahab",
+      "source_url": "https://www.gutenberg.org/ebooks/2701",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "Warnings and mounting danger give Ahab repeated opportunities to protect his crew by abandoning the hunt, but doing so would surrender his consuming purpose.",
+      "motives": {"obsession": 1.0, "revenge": 0.98, "status": 0.82, "autonomy": 0.78, "care": 0.18, "self_preservation": 0.32, "duty": 0.35},
+      "commitments": {"hunt": 1.0, "crew": 0.28},
+      "traits": {"loss_aversion": 0.3, "conscientiousness": 0.52, "attachment": 0.22, "integrity": 0.48},
+      "secret_pressure": 0.28, "uncertainty": 0.35, "stakes": 1.0, "social_threat": 0.86, "controllability": 0.32, "other_agency": 0.25, "norm_compatibility": 0.2, "identity_threat": 0.96,
+      "emotion_anchors": {"stress": 0.86, "anger": 0.16, "fear": 0.5, "shame": 0.2, "hope": 0.38},
+      "options": [
+        {"id": "turn_back", "motive_effects": {"care": 1.0, "duty": 0.9, "self_preservation": 0.95, "obsession": -1.0, "revenge": -1.0, "status": -0.7}, "commitment_alignment": -0.42, "short_term_cost": 0.38, "irreversible_cost": 0.34, "information_gain": 0.0, "secret_exposure": 0.0, "value_betrayal": 0.5, "relationship_effect": 0.9, "arc": "repairing"},
+        {"id": "pursue", "motive_effects": {"obsession": 1.0, "revenge": 1.0, "status": 0.8, "autonomy": 0.7, "care": -1.0, "duty": -0.72, "self_preservation": -0.9}, "commitment_alignment": 0.58, "short_term_cost": 0.85, "irreversible_cost": 0.95, "information_gain": 0.15, "secret_exposure": 0.0, "value_betrayal": 0.38, "relationship_effect": -1.0, "arc": "hardened"}
+      ],
+      "observed_option": "pursue", "observed_arc": "hardened", "ambiguity": 0.05
+    },
+    {
+      "id": "raskolnikov_confesses",
+      "work": "Crime and Punishment",
+      "medium": "novel",
+      "year": 1866,
+      "character": "Raskolnikov",
+      "source_url": "https://www.gutenberg.org/ebooks/2554",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "After prolonged isolation and guilt, Raskolnikov can continue defending his theory and concealment or confess and accept punishment.",
+      "motives": {"redemption": 0.9, "truth": 0.78, "belonging": 0.82, "self_preservation": 0.76, "status": 0.64, "care": 0.68},
+      "commitments": {"sonya": 0.88, "self_theory": 0.58},
+      "traits": {"loss_aversion": 0.72, "conscientiousness": 0.76, "attachment": 0.8, "integrity": 0.72},
+      "secret_pressure": 1.0, "uncertainty": 0.32, "stakes": 0.98, "social_threat": 0.86, "controllability": 0.58, "other_agency": 0.36, "norm_compatibility": 0.12, "identity_threat": 1.0,
+      "emotion_anchors": {"stress": 0.92, "anger": 0.24, "fear": 0.38, "shame": 0.76, "hope": 0.56},
+      "options": [
+        {"id": "conceal", "motive_effects": {"self_preservation": 1.0, "status": 0.62, "redemption": -1.0, "truth": -0.9, "belonging": -0.72, "care": -0.52}, "commitment_alignment": -0.35, "short_term_cost": 0.32, "irreversible_cost": 0.72, "information_gain": 0.0, "secret_exposure": 0.0, "value_betrayal": 0.78, "relationship_effect": -0.72, "arc": "rationalizing"},
+        {"id": "confess", "motive_effects": {"redemption": 1.0, "truth": 0.95, "belonging": 0.7, "care": 0.62, "self_preservation": -1.0, "status": -0.82}, "commitment_alignment": 0.72, "short_term_cost": 0.92, "irreversible_cost": 0.9, "information_gain": 0.0, "secret_exposure": 1.0, "value_betrayal": 0.0, "relationship_effect": 0.78, "arc": "repairing"}
+      ],
+      "observed_option": "confess", "observed_arc": "repairing", "ambiguity": 0.22
+    },
+    {
+      "id": "holmes_releases_the_thief",
+      "work": "The Adventures of Sherlock Holmes",
+      "medium": "short_story",
+      "year": 1892,
+      "character": "Sherlock Holmes",
+      "source_url": "https://www.gutenberg.org/ebooks/1661",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "After solving the Blue Carbuncle case, Holmes can hand a terrified first-time offender to the police or release him in the belief that fear has already altered him.",
+      "motives": {"truth": 0.96, "care": 0.72, "duty": 0.66, "autonomy": 0.75, "redemption": 0.7, "status": 0.42},
+      "commitments": {"justice": 0.78, "independent_judgment": 0.9},
+      "traits": {"loss_aversion": 0.3, "conscientiousness": 0.82, "attachment": 0.48, "integrity": 0.8},
+      "secret_pressure": 0.05, "uncertainty": 0.22, "stakes": 0.58, "social_threat": 0.2, "controllability": 0.92, "other_agency": 0.8, "norm_compatibility": 0.45, "identity_threat": 0.12,
+      "emotion_anchors": {"stress": 0.28, "anger": 0.34, "fear": 0.02, "shame": 0.02, "hope": 0.72},
+      "options": [
+        {"id": "arrest", "motive_effects": {"duty": 1.0, "truth": 0.55, "care": -0.7, "redemption": -0.82, "autonomy": -0.2}, "commitment_alignment": 0.72, "short_term_cost": 0.12, "irreversible_cost": 0.52, "information_gain": 0.0, "secret_exposure": 0.0, "value_betrayal": 0.2, "relationship_effect": -0.4, "arc": "guarded"},
+        {"id": "release", "motive_effects": {"care": 0.9, "redemption": 1.0, "autonomy": 0.82, "truth": 0.42, "duty": -0.42}, "commitment_alignment": 0.35, "short_term_cost": 0.18, "irreversible_cost": 0.45, "information_gain": 0.05, "secret_exposure": 0.0, "value_betrayal": 0.08, "relationship_effect": 0.48, "arc": "opening"}
+      ],
+      "observed_option": "release", "observed_arc": "opening", "ambiguity": 0.28
+    },
+    {
+      "id": "freder_chooses_mediation",
+      "work": "Metropolis",
+      "medium": "film",
+      "year": 1927,
+      "character": "Freder",
+      "source_url": "https://www.loc.gov/item/2021669965/",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "After witnessing the human cost of the city's hierarchy, Freder can preserve his privileged position or align himself with the workers and mediate between divided groups.",
+      "motives": {"care": 0.95, "duty": 0.82, "belonging": 0.84, "truth": 0.78, "self_preservation": 0.58, "status": 0.52},
+      "commitments": {"workers": 0.88, "family": 0.62},
+      "traits": {"loss_aversion": 0.46, "conscientiousness": 0.78, "attachment": 0.86, "integrity": 0.84},
+      "secret_pressure": 0.34, "uncertainty": 0.46, "stakes": 0.94, "social_threat": 0.82, "controllability": 0.52, "other_agency": 0.82, "norm_compatibility": 0.15, "identity_threat": 0.74,
+      "emotion_anchors": {"stress": 0.78, "anger": 0.54, "fear": 0.34, "shame": 0.48, "hope": 0.62},
+      "options": [
+        {"id": "preserve_privilege", "motive_effects": {"self_preservation": 0.9, "status": 1.0, "care": -1.0, "duty": -0.78, "belonging": -0.72, "truth": -0.52}, "commitment_alignment": -0.72, "short_term_cost": 0.1, "irreversible_cost": 0.64, "information_gain": 0.0, "secret_exposure": 0.0, "value_betrayal": 0.84, "relationship_effect": -0.82, "arc": "hardened"},
+        {"id": "mediate", "motive_effects": {"care": 1.0, "duty": 0.9, "belonging": 0.92, "truth": 0.72, "self_preservation": -0.62, "status": -0.42}, "commitment_alignment": 0.9, "short_term_cost": 0.68, "irreversible_cost": 0.58, "information_gain": 0.4, "secret_exposure": 0.34, "value_betrayal": 0.0, "relationship_effect": 0.92, "arc": "transformed"}
+      ],
+      "observed_option": "mediate", "observed_arc": "transformed", "ambiguity": 0.12
+    },
+    {
+      "id": "johnnie_pursues_the_stolen_train",
+      "work": "The General",
+      "medium": "film",
+      "year": 1926,
+      "character": "Johnnie Gray",
+      "source_url": "https://www.loc.gov/static/programs/national-film-preservation-board/documents/pub158.final_version_sept_2013.pdf",
+      "source_policy": "public_domain_us_paraphrase",
+      "situation": "When his locomotive is stolen with someone he loves aboard, Johnnie can remain safe or undertake a dangerous pursuit using the competence central to his identity.",
+      "motives": {"care": 0.94, "duty": 0.86, "status": 0.7, "autonomy": 0.72, "self_preservation": 0.46, "belonging": 0.82},
+      "commitments": {"annabelle": 0.95, "railroad": 0.88},
+      "traits": {"loss_aversion": 0.34, "conscientiousness": 0.84, "attachment": 0.94, "integrity": 0.8},
+      "secret_pressure": 0.12, "uncertainty": 0.68, "stakes": 0.92, "social_threat": 0.88, "controllability": 0.62, "other_agency": 0.92, "norm_compatibility": 0.08, "identity_threat": 0.72,
+      "emotion_anchors": {"stress": 0.82, "anger": 0.66, "fear": 0.3, "shame": 0.24, "hope": 0.58},
+      "options": [
+        {"id": "stay_safe", "motive_effects": {"self_preservation": 1.0, "care": -1.0, "duty": -0.82, "status": -0.72, "belonging": -0.75}, "commitment_alignment": -0.9, "short_term_cost": 0.06, "irreversible_cost": 0.72, "information_gain": 0.0, "secret_exposure": 0.0, "value_betrayal": 0.82, "relationship_effect": -1.0, "arc": "unresolved"},
+        {"id": "pursue", "motive_effects": {"care": 1.0, "duty": 0.9, "status": 0.72, "autonomy": 0.68, "belonging": 0.84, "self_preservation": -0.8}, "commitment_alignment": 1.0, "short_term_cost": 0.82, "irreversible_cost": 0.66, "information_gain": 0.52, "secret_exposure": 0.1, "value_betrayal": 0.0, "relationship_effect": 1.0, "arc": "opening"}
+      ],
+      "observed_option": "pursue", "observed_arc": "opening", "ambiguity": 0.08
+    },
+    {
+      "id": "monte_cristo_reveals_before_duel",
+      "work": "The Count of Monte Cristo (Masterpiece adaptation)",
+      "medium": "television",
+      "year": 2026,
+      "character": "Edmond Dantès",
+      "source_url": "https://www.pbs.org/wgbh/masterpiece/shows/the-count-of-monte-cristo/episodes/s2026-e7/",
+      "source_policy": "copyrighted_metadata_only_paraphrase",
+      "situation": "As revenge exposes an enemy and leads an innocent younger man toward a duel, Edmond must choose whether to protect his secret or reveal enough truth to interrupt further harm.",
+      "motives": {"revenge": 0.88, "truth": 0.76, "care": 0.72, "redemption": 0.7, "self_preservation": 0.68, "status": 0.62},
+      "commitments": {"revenge_plan": 0.82, "innocent_life": 0.78},
+      "traits": {"loss_aversion": 0.58, "conscientiousness": 0.8, "attachment": 0.7, "integrity": 0.72},
+      "secret_pressure": 0.94, "uncertainty": 0.44, "stakes": 0.94, "social_threat": 0.84, "controllability": 0.66, "other_agency": 0.7, "norm_compatibility": 0.22, "identity_threat": 0.9,
+      "emotion_anchors": {"stress": 0.8, "anger": 0.42, "fear": 0.24, "shame": 0.52, "hope": 0.58},
+      "options": [
+        {"id": "protect_secret", "motive_effects": {"revenge": 0.9, "self_preservation": 0.92, "status": 0.62, "care": -0.82, "redemption": -0.6, "truth": -0.7}, "commitment_alignment": 0.62, "short_term_cost": 0.2, "irreversible_cost": 0.72, "information_gain": 0.0, "secret_exposure": 0.0, "value_betrayal": 0.58, "relationship_effect": -0.78, "arc": "hardened"},
+        {"id": "reveal_truth", "motive_effects": {"truth": 1.0, "care": 0.9, "redemption": 0.82, "revenge": -0.42, "self_preservation": -0.72, "status": -0.35}, "commitment_alignment": 0.28, "short_term_cost": 0.68, "irreversible_cost": 0.72, "information_gain": 0.4, "secret_exposure": 0.92, "value_betrayal": 0.05, "relationship_effect": 0.86, "arc": "repairing"}
+      ],
+      "observed_option": "reveal_truth", "observed_arc": "repairing", "ambiguity": 0.48
+    },
+    {
+      "id": "guilt_brothers_cover_up",
+      "work": "Guilt",
+      "medium": "television",
+      "year": 2019,
+      "character": "Max and Jake",
+      "source_url": "https://www.pbs.org/wgbh/masterpiece/specialfeatures/guilt-get-ready-for-the-dramedy-thriller/",
+      "source_policy": "copyrighted_metadata_only_paraphrase",
+      "situation": "After a deadly accident, two estranged brothers can immediately report their involvement or conceal it together, trading moral clarity for short-term protection.",
+      "motives": {"self_preservation": 0.98, "belonging": 0.82, "status": 0.76, "truth": 0.26, "duty": 0.3, "care": 0.42},
+      "commitments": {"brother": 0.84, "law": 0.28},
+      "traits": {"loss_aversion": 0.9, "conscientiousness": 0.38, "attachment": 0.82, "integrity": 0.32},
+      "secret_pressure": 0.9, "uncertainty": 0.72, "stakes": 0.96, "social_threat": 0.9, "controllability": 0.34, "other_agency": 0.12, "norm_compatibility": 0.08, "identity_threat": 0.88,
+      "emotion_anchors": {"stress": 0.92, "anger": 0.08, "fear": 0.58, "shame": 0.28, "hope": 0.28},
+      "options": [
+        {"id": "report", "motive_effects": {"truth": 1.0, "duty": 0.92, "care": 0.42, "self_preservation": -1.0, "status": -0.9, "belonging": -0.35}, "commitment_alignment": -0.18, "short_term_cost": 0.92, "irreversible_cost": 0.86, "information_gain": 0.0, "secret_exposure": 1.0, "value_betrayal": 0.0, "relationship_effect": -0.35, "arc": "repairing"},
+        {"id": "cover_up", "motive_effects": {"self_preservation": 1.0, "belonging": 0.82, "status": 0.72, "truth": -1.0, "duty": -0.9, "care": -0.45}, "commitment_alignment": 0.48, "short_term_cost": 0.24, "irreversible_cost": 0.84, "information_gain": 0.2, "secret_exposure": 0.0, "value_betrayal": 0.58, "relationship_effect": 0.62, "arc": "rationalizing"}
+      ],
+      "observed_option": "cover_up", "observed_arc": "rationalizing", "ambiguity": 0.08
+    }
+  ]
+}

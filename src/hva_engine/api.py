@@ -63,7 +63,15 @@ async def dashboard() -> FileResponse:
 
 @app.get("/health")
 async def health() -> dict[str, object]:
-    return {"status": "ok", "mods": len(engine.mods), "matches": len(engine.matches)}
+    return {
+        "status": "ok",
+        "mods": len(engine.mods),
+        "matches": len(engine.matches),
+        "fact_store": engine.fact_store.name,
+        "agent_runtime": engine.agent_runtime,
+        "llm_mods": sorted(engine.llm_mod_ids),
+        "character_cards": len(engine.character_cards.cards),
+    }
 
 
 @app.get("/api/mods")
@@ -71,10 +79,22 @@ async def list_mods() -> list[dict[str, object]]:
     return [mod.manifest() for mod in engine.mods.values()]
 
 
+@app.get("/api/character-cards")
+async def list_character_cards() -> list[dict[str, object]]:
+    return engine.character_cards.catalog()
+
+
 @app.post("/api/matches", response_model=MatchView, status_code=201)
 async def create_match(request: CreateMatchRequest) -> MatchView:
     try:
-        return engine.create_match(request.mod_id, request.human_name, request.seed, request.mode)
+        return engine.create_match(
+            request.mod_id,
+            request.human_name,
+            request.seed,
+            request.mode,
+            agent_tuning=request.agent_tuning,
+            agent_characters=request.agent_characters,
+        )
     except EngineError as exc:
         raise _bad_request(exc) from exc
 
@@ -114,6 +134,14 @@ async def evaluation_summary() -> dict[str, object]:
 async def context_preview(match_id: str, agent_id: str) -> dict[str, object]:
     try:
         return engine.context_preview(match_id, agent_id)
+    except EngineError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/matches/{match_id}/agents/{agent_id}/fact-graph")
+async def public_fact_graph(match_id: str, agent_id: str) -> dict[str, object]:
+    try:
+        return engine.public_fact_graph(match_id, agent_id)
     except EngineError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

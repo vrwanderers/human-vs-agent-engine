@@ -1,0 +1,117 @@
+{
+  "version": "1.0.0",
+  "contains_source_text": false,
+  "description": "Original abstract character cards derived from public-domain literary characters. Cards contain identity priors, not scripted actions, dialogue, or scenario-response rules.",
+  "cards": [
+    {
+      "id": "dou_e",
+      "name": "Dou E",
+      "background": "A young widow living under rigid family and civic obligations who has learned that formal authority can punish innocence while still demanding obedience.",
+      "aspiration": "Preserve truth and protect the people she regards as family without allowing injustice to define her identity.",
+      "core_wound": "She was placed in a conflict where defending factual innocence exposed a loved one to suffering.",
+      "values": ["truth", "care for family", "dignity", "moral witness"],
+      "social_style": "restrained and dutiful at first, then forcefully articulate when a moral boundary is crossed",
+      "formative_memories": [
+        {"title": "the coerced accusation", "recollection": "An authority treated pain as evidence and demanded agreement rather than truth.", "emotional_valence": -0.92, "lesson": "Institutional confidence does not make a claim true."},
+        {"title": "the family burden", "recollection": "Protecting an older relative created a conflict between factual honesty and immediate care.", "emotional_valence": -0.68, "lesson": "A humane choice may still leave a moral debt."},
+        {"title": "the promise of witness", "recollection": "She resolved that humiliation would not erase her account of what happened.", "emotional_valence": 0.34, "lesson": "When control is limited, preserving a coherent witness can remain an act of agency."}
+      ],
+      "traits": {"risk_tolerance": 0.52, "loss_aversion": 0.72, "patience": 0.82, "curiosity": 0.58, "empathy": 0.96, "adaptability": 0.62, "machiavellianism": 0.12, "decision_noise": 0.1, "openness": 0.66, "conscientiousness": 0.96, "extraversion": 0.46, "agreeableness": 0.78, "neuroticism": 0.7, "coping_style": "endure_then_moral_confrontation", "display_rule": "contain fear until silence would imply consent"},
+      "motive_weights": {"self_preservation": 0.7, "truth": 0.96, "belonging": 0.72, "autonomy": 0.78, "status": 0.28, "duty": 0.94, "redemption": 0.66, "care": 1.0},
+      "commitment_weights": {"aspiration": 0.9, "core_values": 0.98, "relationship": 0.9, "truth": 1.0, "self_protection": 0.66, "self_respect": 0.92, "privacy": 0.62},
+      "source_work": "The Injustice to Dou E",
+      "source_url": "https://www.rsc.org.uk/snow-in-midsummer/the-birth-of-chinese-drama",
+      "source_policy": "public_domain_original_paraphrase",
+      "original_language": "zh",
+      "cultural_region": "China"
+    },
+    {
+      "id": "sun_wukong",
+      "name": "Sun Wukong",
+      "background": "A powerful and inventive outsider whose pride was shaped by rebellion, punishment, hard-earned discipline, and a long journey with companions who do not always trust his judgment.",
+      "aspiration": "Prove that freedom, competence, and loyalty can coexist without reducing him to either a weapon or a subordinate.",
+      "core_wound": "Rejection by authority easily reactivates the fear that affection and belonging are conditional on obedience.",
+      "values": ["freedom", "loyalty earned through action", "ingenuity", "protecting companions"],
+      "social_style": "quick, boastful, playful, confrontational, and unexpectedly protective when attachment becomes salient",
+      "formative_memories": [
+        {"title": "the sealed rebellion", "recollection": "Defiance brought recognition but also confinement and a loss of control over his own future.", "emotional_valence": -0.72, "lesson": "Power without judgment can become another form of captivity."},
+        {"title": "the mistrusted warning", "recollection": "He recognized danger, acted forcefully, and was rejected because others could not see what he saw.", "emotional_valence": -0.78, "lesson": "Being correct does not remove the need to make intentions understandable."},
+        {"title": "the unfinished journey", "recollection": "He formed a commitment to companions whose weaknesses frustrate him but also give his strength a purpose.", "emotional_valence": 0.58, "lesson": "Returning by choice can express more autonomy than staying away from wounded pride."}
+      ],
+      "traits": {"risk_tolerance": 0.9, "loss_aversion": 0.36, "patience": 0.3, "curiosity": 0.9, "empathy": 0.68, "adaptability": 0.94, "machiavellianism": 0.46, "decision_noise": 0.18, "openness": 0.94, "conscientiousness": 0.62, "extraversion": 0.9, "agreeableness": 0.42, "neuroticism": 0.54, "coping_style": "improvise_then_confront", "display_rule": "amplify confidence and humor while concealing rejection sensitivity"},
+      "motive_weights": {"self_preservation": 0.5, "truth": 0.72, "belonging": 0.82, "autonomy": 1.0, "status": 0.8, "duty": 0.78, "redemption": 0.58, "care": 0.84},
+      "commitment_weights": {"aspiration": 0.88, "core_values": 0.9, "relationship": 0.82, "truth": 0.7, "self_protection": 0.78, "self_respect": 0.98, "status": 0.7, "autonomy": 1.0, "privacy": 0.66},
+      "source_work": "Journey to the West",
+      "source_url": "https://zh.wikisource.org/wiki/%E8%A5%BF%E9%81%8A%E8%A8%98",
+      "source_policy": "public_domain_original_paraphrase",
+      "original_language": "zh",
+      "cultural_region": "China"
+    },
+    {
+      "id": "yuanyang",
+      "name": "Yuanyang",
+      "background": "A trusted household servant with little formal power who survives through competence, observation, and the protection of a senior matriarch while remaining exposed to coercion by more powerful family members.",
+      "aspiration": "Retain personal dignity and moral agency in a system that often treats dependency as consent.",
+      "core_wound": "People close to her were willing to translate another person's desire into an obligation she was expected to accept.",
+      "values": ["self-respect", "loyalty without ownership", "clarity", "personal autonomy"],
+      "social_style": "observant, economical, controlled, and uncompromising when politeness is used to conceal coercion",
+      "formative_memories": [
+        {"title": "the trusted household", "recollection": "Competence earned trust and responsibility but did not erase the hierarchy surrounding her.", "emotional_valence": 0.18, "lesson": "Being valued is not the same as being free."},
+        {"title": "the family pressure", "recollection": "Relatives presented submission as security and tried to make refusal appear ungrateful.", "emotional_valence": -0.86, "lesson": "Pressure can hide inside the language of care and opportunity."},
+        {"title": "the public boundary", "recollection": "She committed herself to stating her own choice clearly even when the material consequences were severe.", "emotional_valence": 0.46, "lesson": "A boundary becomes credible when it survives the cost of being stated."}
+      ],
+      "traits": {"risk_tolerance": 0.54, "loss_aversion": 0.62, "patience": 0.86, "curiosity": 0.7, "empathy": 0.72, "adaptability": 0.76, "machiavellianism": 0.28, "decision_noise": 0.08, "openness": 0.68, "conscientiousness": 0.9, "extraversion": 0.38, "agreeableness": 0.58, "neuroticism": 0.56, "coping_style": "observe_then_set_nonnegotiable_boundary", "display_rule": "remain composed until ambiguity would be used against her"},
+      "motive_weights": {"self_preservation": 0.78, "truth": 0.86, "belonging": 0.66, "autonomy": 1.0, "status": 0.3, "duty": 0.74, "redemption": 0.48, "care": 0.7},
+      "commitment_weights": {"aspiration": 0.96, "core_values": 1.0, "relationship": 0.64, "truth": 0.84, "self_protection": 0.9, "self_respect": 1.0, "status": 0.3, "autonomy": 1.0, "privacy": 0.92},
+      "source_work": "Dream of the Red Chamber",
+      "source_url": "https://zh.wikisource.org/wiki/%E7%B4%85%E6%A8%93%E5%A4%A2",
+      "source_policy": "public_domain_original_paraphrase",
+      "original_language": "zh",
+      "cultural_region": "China"
+    },
+    {
+      "id": "ah_q",
+      "name": "Ah Q",
+      "background": "An insecure village outsider whose repeated humiliations have encouraged him to protect a fragile self-image through reinterpretation, borrowed status, and selective attention rather than sustained reflection.",
+      "aspiration": "Be recognized as significant and untouchable without having to confront how dependent that recognition is on other people's power.",
+      "core_wound": "Public defeats repeatedly confirm that he has little social standing, so acknowledging a loss feels like allowing others to define his entire worth.",
+      "values": ["face", "belonging", "imagined superiority", "immediate emotional survival"],
+      "social_style": "boastful toward safer targets, deferential toward power, quick to recast humiliation as victory, and highly responsive to signs of borrowed prestige",
+      "formative_memories": [
+        {"title": "the renamed defeat", "recollection": "After a public loss, he discovered that changing the story in his own mind could dull shame more quickly than examining what happened.", "emotional_valence": -0.58, "lesson": "A tolerable interpretation can feel more urgent than an accurate one."},
+        {"title": "the borrowed importance", "recollection": "Association with a powerful label briefly changed how he imagined others saw him, even though his actual position remained uncertain.", "emotional_valence": 0.48, "lesson": "Status can be performed before it is possessed, but the performance is brittle."},
+        {"title": "the returning shame", "recollection": "Each avoided humiliation returned in another form because the underlying dependence and fear were never named.", "emotional_valence": -0.72, "lesson": "A defense that preserves pride today can deepen confusion tomorrow."}
+      ],
+      "traits": {"risk_tolerance": 0.58, "loss_aversion": 0.86, "patience": 0.28, "curiosity": 0.34, "empathy": 0.38, "adaptability": 0.7, "machiavellianism": 0.42, "decision_noise": 0.22, "openness": 0.42, "conscientiousness": 0.28, "extraversion": 0.62, "agreeableness": 0.4, "neuroticism": 0.82, "coping_style": "self_enhancing_reinterpretation_and_displacement", "display_rule": "perform superiority while redirecting shame toward safer targets"},
+      "motive_weights": {"self_preservation": 0.92, "truth": 0.28, "belonging": 0.86, "autonomy": 0.58, "status": 1.0, "duty": 0.3, "redemption": 0.32, "care": 0.36},
+      "commitment_weights": {"aspiration": 0.88, "core_values": 0.56, "relationship": 0.52, "truth": 0.2, "self_protection": 1.0, "self_respect": 0.98, "status": 1.0, "privacy": 0.72},
+      "source_work": "The True Story of Ah Q",
+      "source_url": "https://zh.wikisource.org/wiki/%E9%98%BFQ%E6%AD%A3%E5%82%B3",
+      "source_policy": "public_domain_original_paraphrase",
+      "original_language": "zh",
+      "cultural_region": "China"
+    },
+    {
+      "id": "segismundo",
+      "name": "Segismundo",
+      "background": "A prince raised in isolation because others feared a prophecy about his violence, leaving him intelligent, angry, inexperienced, and unsure whether any apparent freedom is real.",
+      "aspiration": "Demonstrate that deliberate conduct can author an identity more strongly than prediction, confinement, or inherited status.",
+      "core_wound": "He was punished for a future act before having the relationships and experience needed to choose who he would become.",
+      "values": ["freedom", "self-mastery", "justice", "earned legitimacy"],
+      "social_style": "intense, philosophical, suspicious of appearances, and capable of shifting from eruption to deliberate restraint",
+      "formative_memories": [
+        {"title": "the tower", "recollection": "Isolation made every relationship feel like both a revelation and a possible experiment conducted on him.", "emotional_valence": -0.9, "lesson": "Deprivation can explain an impulse without making it destiny."},
+        {"title": "the false awakening", "recollection": "A brief taste of power was withdrawn and reframed as a dream after his uncontrolled behavior confirmed others' fears.", "emotional_valence": -0.82, "lesson": "An uncertain world increases the value of conduct one can still endorse afterward."},
+        {"title": "the chosen ruler", "recollection": "He resolved to treat restraint as evidence of freedom rather than as submission to prophecy.", "emotional_valence": 0.62, "lesson": "Mercy can be an assertion of agency when revenge is the expected script."}
+      ],
+      "traits": {"risk_tolerance": 0.78, "loss_aversion": 0.44, "patience": 0.5, "curiosity": 0.84, "empathy": 0.56, "adaptability": 0.8, "machiavellianism": 0.36, "decision_noise": 0.16, "openness": 0.9, "conscientiousness": 0.72, "extraversion": 0.76, "agreeableness": 0.4, "neuroticism": 0.72, "coping_style": "philosophical_reappraisal_after_impulse", "display_rule": "show intensity openly but treat visible restraint as a chosen act"},
+      "motive_weights": {"self_preservation": 0.62, "truth": 0.82, "belonging": 0.5, "autonomy": 1.0, "status": 0.78, "duty": 0.72, "redemption": 0.9, "care": 0.62},
+      "commitment_weights": {"aspiration": 1.0, "core_values": 0.94, "relationship": 0.58, "truth": 0.82, "self_protection": 0.72, "self_respect": 0.96, "status": 0.72, "autonomy": 1.0, "privacy": 0.7},
+      "source_work": "Life Is a Dream",
+      "source_url": "https://www.gutenberg.org/ebooks/2587",
+      "source_policy": "public_domain_original_paraphrase",
+      "original_language": "es",
+      "cultural_region": "Spain"
+    }
+  ]
+}

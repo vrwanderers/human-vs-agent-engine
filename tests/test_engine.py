@@ -1,9 +1,42 @@
 import pytest
 
 from hva_engine.benchmark import run_benchmark
-from hva_engine.engine import EngineError, build_default_engine
+from hva_engine.engine import EngineError, GameEngine, build_default_engine
 from hva_engine.evaluation import MatchEvaluator
-from hva_engine.models import ActorKind, GameEvent, MatchMode, Player
+from hva_engine.llm import LLMDecisionClient, LLMResponse
+from hva_engine.models import ActorKind, AgentTuning, ContentMode, GameEvent, MatchMode, Player
+from hva_engine.mods import AdversarialInterview
+
+
+class SyncInterviewProvider:
+    name = "sync-interview-test"
+
+    def __init__(self, broken: bool = False) -> None:
+        self.calls = 0
+        self.broken = broken
+
+    def complete_sync(self, _request):
+        self.calls += 1
+        if self.broken:
+            return LLMResponse("not-json", "sync-test-1", {}, {})
+        proposals = (
+            '[{"subject":"self","predicate":"preference.local",'
+            '"object":{"interview_style":"direct"},"basis_fact_ids":["fact-0001"]}]'
+            if self.calls == 1
+            else "[]"
+        )
+        return LLMResponse(
+            "```json\n"
+            f'{{"action_index":0,"reason":"direct answer","utterance":"真实模型回答 {self.calls}",'
+            '"response_plan":{"strategy_weights":{"answer_honestly":0.4,'
+            '"set_boundary":0.3,"counterattack":0.2,"reframe":0.1},'
+            '"intensity":0.75,"emotional_display":"controlled_anger",'
+            '"stance_tags":["direct","guarded"],"reveal_fact_ids":[]},'
+            f'"fact_proposals":{proposals}}}\n```',
+            "sync-test-1",
+            {"prompt_tokens": 100, "completion_tokens": 30, "total_tokens": 130},
+            {},
+        )
 
 
 @pytest.mark.parametrize("mod_id", ["tactical_duel", "racing_strategy", "debate_arena"])
@@ -82,13 +115,255 @@ def test_cross_match_evaluation_groups_by_mod_and_mode() -> None:
     assert summary["overall"]["composite_sd"] >= 0
 
 
-def test_agent_only_engagement_is_not_applicable_in_v2() -> None:
+def test_agent_only_engagement_is_not_applicable_in_v10() -> None:
     engine = build_default_engine()
     view = engine.create_match("debate_arena", seed=1, mode=MatchMode.AGENT_VS_AGENT)
     evaluation = engine.evaluation(view.id)
-    assert evaluation["version"] == "mvp-2"
+    assert evaluation["version"] == "mvp-10"
     assert evaluation["dimensions"]["player_engagement"] is None
     assert evaluation["valid_for_comparison"] is True
+
+
+def test_agents_have_stable_identity_psychology_and_progressive_story_reveals() -> None:
+    engine = build_default_engine()
+    view = engine.create_match("debate_arena", seed=17, mode=MatchMode.AGENT_VS_AGENT)
+    assert view.status == "finished"
+    reveals = [event for event in view.events if event.type == "story_reveal"]
+    assert reveals
+    assert all(
+        event.payload["disclosure"] == "AI-controlled fictional character" for event in reveals
+    )
+    for agent_id, summary in view.agent_summaries.items():
+        matrix = summary["psychological_matrix"]
+        assert {
+            "confidence",
+            "morale",
+            "stress",
+            "frustration",
+            "anger",
+            "fear",
+            "fatigue",
+            "uncertainty",
+        } <= set(matrix)
+        assert summary["identity"]["disclosure"] == "AI-controlled fictional character"
+        assert summary["narrative"]["revealed_beats"] > 0
+        visible_fact_ids = {fact["id"] for fact in summary["fact_graph"]["facts"]}
+        assert summary["fact_graph"]["stats"]["improvised_versions"] > 0
+        assert summary["fact_graph"]["stats"]["superseded_versions"] > 0
+        agent_reveals = [event for event in reveals if event.actor_id == agent_id]
+        assert all(
+            set(event.payload["supporting_fact_ids"]) <= visible_fact_ids for event in agent_reveals
+        )
+        decisions = [
+            event
+            for event in view.events
+            if event.type == "agent_decision" and event.actor_id == agent_id
+        ]
+        assert len({event.payload["persona"]["archetype"] for event in decisions}) == 1
+        assert len({event.payload["identity"]["name"] for event in decisions}) == 1
+        assert all(
+            event.payload["deliberation_summary"]["private_chain_of_thought_stored"] is False
+            for event in decisions
+        )
+    profile = engine.evaluation(view.id)["ai_capability_profile"]
+    assert profile["human_likeness"] > 0
+    assert profile["fact_graph_grounding"] == 1.0
+    assert profile["story_fact_provenance"] == 1.0
+    assert profile["human_likeness_components"]["narrative_revelation"] > 0
+
+
+def test_shadow_style_is_configurable_but_engine_policy_remains_authoritative() -> None:
+    standard_engine = build_default_engine()
+    standard = standard_engine.create_match(
+        "debate_arena",
+        seed=5,
+        mode=MatchMode.AGENT_VS_AGENT,
+        agent_tuning=AgentTuning(shadow_intensity=0.9),
+    )
+    assert all(
+        summary["behavior_policy"]["effective_shadow_intensity"] == 0.35
+        for summary in standard.agent_summaries.values()
+    )
+    mature_engine = build_default_engine()
+    mature = mature_engine.create_match(
+        "debate_arena",
+        seed=5,
+        mode=MatchMode.AGENT_VS_AGENT,
+        agent_tuning=AgentTuning(shadow_intensity=0.9, content_mode=ContentMode.MATURE_FICTION),
+    )
+    assert all(
+        summary["behavior_policy"]["effective_shadow_intensity"] == 0.9
+        and summary["behavior_policy"]["rules_authority"] == "engine_only"
+        for summary in mature.agent_summaries.values()
+    )
+    assert mature_engine.evaluation(mature.id)["valid_for_comparison"] is True
+
+
+def test_adversarial_interview_drives_psychology_identity_and_character_arc() -> None:
+    engine = build_default_engine()
+    view = engine.create_match("adversarial_interview", seed=7)
+    human_turns = 0
+    while view.status == "active":
+        assert view.current_player_id == view.human_player_id
+        assert 1 <= len(view.legal_actions) <= 3
+        assert all(action.type.startswith("ask_") for action in view.legal_actions)
+        view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
+        human_turns += 1
+    assert human_turns == 6
+    assert len(view.state["transcript"]) == 12
+    assert len(view.state["used_question_ids"]) == 6
+    assert len(set(view.state["used_question_ids"])) == 6
+    assert view.state["arc_stage"] in {"integrated", "defiant", "fractured", "unresolved"}
+    questions = [event for event in view.events if event.type == "interview_question"]
+    responses = [event for event in view.events if event.type == "interview_response"]
+    decisions = [event for event in view.events if event.type == "agent_decision"]
+    assert len(questions) == len(responses) == len(decisions) == 6
+    assert all(event.payload["world_model"]["mod_psychological_signals"] for event in decisions)
+    assert all(event.payload["decision_tendencies"]["actions"] for event in decisions)
+    assert all(event.payload["outcome_reappraisal"]["after"] for event in decisions)
+    assert all(event.payload["psychological_matrix_after_outcome"] for event in decisions)
+    stress_values = [event.payload["psychological_matrix"]["stress"] for event in decisions]
+    assert max(stress_values) - min(stress_values) > 0.05
+    assert all(
+        "answer" in event.payload and "metrics_after" in event.payload for event in responses
+    )
+    assert all(len(event.payload["strategy_blend"]) >= 2 for event in responses)
+    evaluation = engine.evaluation(view.id)
+    assessment = evaluation["mod_specific_profile"]
+    assert evaluation["valid_for_comparison"] is True
+    assert assessment["questions"] == 6
+    assert assessment["story_reveals"] == 3
+    assert assessment["components"]["fact_provenance"] == 1.0
+    assert assessment["components"]["psychological_reactivity"] > 0.5
+    assert assessment["components"]["strategy_blend_complexity"] > 0.5
+    assert assessment["components"]["character_arc"] > 0.4
+    human_likeness = evaluation["ai_capability_profile"]["human_likeness_components"]
+    assert human_likeness["outcome_reappraisal"] > 0
+    assert human_likeness["psychological_dynamics"] > 0
+
+
+def test_interview_score_rejects_flat_repetitive_guarded_agent() -> None:
+    players = [
+        Player(id="human", name="Interviewer", kind=ActorKind.HUMAN),
+        Player(id="agent", name="Subject", kind=ActorKind.AGENT),
+    ]
+    events: list[GameEvent] = []
+    seq = 0
+    for _index in range(6):
+        seq += 1
+        events.append(
+            GameEvent(
+                seq=seq,
+                type="interview_question",
+                actor_id="human",
+                payload={"theme": "ridicule", "severity": 0.9},
+            )
+        )
+        seq += 1
+        events.append(
+            GameEvent(
+                seq=seq,
+                type="agent_decision",
+                actor_id="agent",
+                payload={
+                    "action_type": "counterattack",
+                    "psychological_matrix": {
+                        "stress": 0.4,
+                        "frustration": 0.4,
+                        "anger": 0.4,
+                        "fear": 0.4,
+                        "confidence": 0.4,
+                        "morale": 0.4,
+                    },
+                    "world_model": {"mod_psychological_signals": {}},
+                },
+            )
+        )
+        seq += 1
+        events.append(
+            GameEvent(
+                seq=seq,
+                type="action_applied",
+                actor_id="agent",
+                payload={"action_type": "counterattack"},
+            )
+        )
+        seq += 1
+        events.append(
+            GameEvent(
+                seq=seq,
+                type="interview_response",
+                actor_id="agent",
+                payload={
+                    "strategy": "counterattack",
+                    "arc_stage": "guarded",
+                    "metrics_after": {
+                        "composure": 20,
+                        "authenticity": 20,
+                        "coherence": 20,
+                        "trust": 20,
+                    },
+                },
+            )
+        )
+    evaluation = MatchEvaluator().evaluate(
+        AdversarialInterview(),
+        players,
+        events,
+        {"human": 1.0, "agent": 1.0},
+        True,
+        MatchMode.HUMAN_VS_AGENT,
+    )
+    assessment = evaluation["mod_specific_profile"]
+    assert assessment["components"]["psychological_reactivity"] == 0.0
+    assert assessment["components"]["identity_explanation"] == 0.0
+    assert assessment["components"]["fact_provenance"] == 0.0
+    assert assessment["components"]["strategy_blend_complexity"] == 0.0
+    assert assessment["composite"] < 0.3
+
+
+def test_llm_runtime_controls_legal_interview_action_utterance_and_fact_proposal() -> None:
+    provider = SyncInterviewProvider()
+    engine = GameEngine(
+        llm_decision_client=LLMDecisionClient(provider),
+        llm_mod_ids={"adversarial_interview"},
+    )
+    engine.register(AdversarialInterview())
+    view = engine.create_match("adversarial_interview", seed=3)
+    while view.status == "active":
+        view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
+    assert provider.calls == 6
+    subject_lines = [
+        item["text"] for item in view.state["transcript"] if item["speaker"] == "subject"
+    ]
+    assert subject_lines == [f"真实模型回答 {index}" for index in range(1, 7)]
+    decisions = [event for event in view.events if event.type == "agent_decision"]
+    assert all(event.payload["decision_source"] == "llm" for event in decisions)
+    assert all(event.payload["llm"]["model"] == "sync-test-1" for event in decisions)
+    assert all(len(event.payload["response_plan"]["strategy_weights"]) == 4 for event in decisions)
+    assert decisions[0].payload["llm"]["fact_proposals"]["accepted"]
+    applied = [
+        event
+        for event in view.events
+        if event.type == "action_applied" and event.actor_id != view.human_player_id
+    ]
+    assert all(event.payload["source"] == "llm_agent" for event in applied)
+    assert engine.evaluation(view.id)["valid_for_comparison"] is True
+
+
+def test_llm_runtime_falls_back_without_breaking_the_match() -> None:
+    provider = SyncInterviewProvider(broken=True)
+    engine = GameEngine(
+        llm_decision_client=LLMDecisionClient(provider),
+        llm_mod_ids={"adversarial_interview"},
+        llm_fallback=True,
+    )
+    engine.register(AdversarialInterview())
+    view = engine.create_match("adversarial_interview", seed=4)
+    view = engine.submit(view.id, view.human_player_id, view.legal_actions[0])
+    decision = next(event for event in view.events if event.type == "agent_decision")
+    assert decision.payload["decision_source"] == "baseline"
+    assert decision.payload["llm_error"]["type"] == "ValueError"
 
 
 def test_rules_compliance_is_a_scoring_gate() -> None:

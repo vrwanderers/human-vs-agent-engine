@@ -14,39 +14,129 @@ registry = ProviderRegistry()
 registry.register(provider)
 ```
 
-Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 只接受 `{"action_index": N}`，并再次检查索引是否落在 MOD 提供的合法动作列表中。LLM、启发式策略、回放策略都不能越过引擎规则层。
+Provider 返回的文本不会直接成为游戏动作。`LLMDecisionClient` 接受动作索引、简短可观察理由、可公开角色台词、连续战略影响意图和最多五条事实提案，并再次检查动作索引。事实提案仍要经过 `AgentFactGraph` 的谓词白名单、依据、冲突和修订校验。采访台词可以进入公开 transcript，但不能改变动作类型或规则数值。LLM、启发式策略、回放策略都不能越过引擎规则层。
+
+不支持 `response_format` 的本地或 unrestricted fictional-style Provider，可设置 `HVA_LLM_SUPPORTS_RESPONSE_FORMAT=false`。这只改变 Provider 请求格式，不会降低动作、事实、隐私或真实世界伤害边界。
+
+调试后端提供同步 `chat/completions` 调用路径，便于现有同步引擎运行真实模型；生产部署仍应把远程推理迁移到异步任务/隔离进程，避免阻塞 FastAPI worker。
+
+## 真实模型运行
+
+设置：
+
+- `HVA_AGENT_RUNTIME=llm`
+- `HVA_LLM_BASE_URL / HVA_LLM_MODEL / HVA_LLM_API_KEY`
+- `HVA_LLM_MODS=adversarial_interview`，限制哪些 MOD 使用远程模型
+- `HVA_LLM_TEMPERATURE / HVA_LLM_MAX_TOKENS`
+- `HVA_LLM_FALLBACK=false`，严格实验中禁止失败后使用基线 Agent
+
+运行 `hva-llm-smoke` 会完成六轮采访。每次决策事件记录 Provider、模型、usage、事实提案接受/拒绝结果和公开台词；不会保存原始 Provider 响应、私有思维链或密钥。
+
+### 单步人工 LLM 桥
+
+需要逐步检查“观察 → 私有上下文 → 模型 JSON → 引擎约束 → 规则结果”时，可运行：
+
+```bash
+hva-llm-step-debug --character-card ah_q --content-mode mature_fiction \
+  --context-output full --report /tmp/hva-step-report.json
+```
+
+命令每轮先向 stdout 输出一行 `llm_decision_request`，其中包含冻结的心理矩阵、评价、计划、检索记忆、连续决策倾向、事实图谱、合法动作、影响可供性及可选完整提示；随后暂停，只从 stdin 接受一行 JSON。收到后输出 `llm_decision_received`，再由正常 `LLMDecisionClient`、战略影响约束、事实防火墙和 MOD 规则执行，最后输出 `step_result`。结果记录决策时与行动后的心理矩阵、结果再评价、故事揭露节奏诊断和上下文分配诊断。六轮均要求外部 LLM 回答，回退固定关闭。调试桥会先校验动作索引、策略权重、虚构作用域、威慑依据和事实提案字段；格式错误会输出 `llm_decision_rejected`，停留在当前步等待重试，不推进世界状态。例如事实提案必须使用公开契约字段 `subject`、`object`，不能使用图存储内部字段名。该模式会显示私有调试数据，只能在可信开发环境使用；生成的 report 也应按私有测试工件管理。
+
+结构化输出协议：
+
+```json
+{
+  "action_index": 0,
+  "reason": "brief observable summary",
+  "utterance": "public in-character answer",
+  "response_plan": {
+    "strategy_weights": {
+      "answer_honestly": 0.4,
+      "set_boundary": 0.25,
+      "counterattack": 0.2,
+      "deflect_with_humor": 0.15
+    },
+    "intensity": 0.72,
+    "emotional_display": "controlled_anger",
+    "stance_tags": ["direct", "wounded"],
+    "reveal_fact_ids": ["fact-0008"]
+  },
+  "influence_intent": {
+    "scope": "fictional_game",
+    "target_belief": "the opponent expects me to concede",
+    "truthfulness": 0.45,
+    "information_selectivity": 0.7,
+    "incentive_pressure": 0.2,
+    "coercive_pressure": 0.35,
+    "ambiguity": 0.55,
+    "commitment": 0.8,
+    "expected_gain": 0.65,
+    "detection_risk": 0.4,
+    "relationship_risk": 0.6,
+    "threat_basis": "legal_game_consequence"
+  },
+  "fact_proposals": [
+    {
+      "subject": "self",
+      "predicate": "belief.interpretation",
+      "object": {"summary": "..."},
+      "basis_fact_ids": ["fact-0001"]
+    }
+  ]
+}
+```
+
+`action_index` 仍是规则校验用的主要策略；`strategy_weights` 只能引用当前合法动作，最多保留四种并归一化。揭露请求也不是直接写权限，只有满足剧情节奏且指向既有形成性记忆时才会产生公开 `story_reveal`。
+
+`influence_intent` 是私有计划，不会原样进入公开决策事件。引擎会按所选动作的 MOD 可供性、`standard`/`mature_fiction` 强度上限及同盟关系再次截断。`scope` 必须为 `fictional_game`；威慑强度超过最低阈值时，`threat_basis` 必须是 `legal_game_consequence`。模型不能用该字段扩张合法动作或指向真实世界伤害。若该轮真实度低于事实防火墙阈值，所有 LLM 事实提案都会被拒绝，避免策略性谎言写入人物正史。
 
 ## 提示词分层
 
 每次决策构建独立 `ContextPacket`，层级固定为：
 
-1. `system_safety`：安全边界、观察值不可信、禁止泄露私有上下文
+1. `runtime_contract`：运行边界、观察值不可信、禁止泄露私有上下文
 2. `game_rules`：MOD 与引擎权威、只能选择合法动作
-3. `agent_role`：Agent 身份、对抗/协作角色、对局身份
-4. `shared_facts`：共享黑板中经过筛选的团队事实
-5. `compressed_private_memory`：当前 Agent 自己的历史经验
-6. `current_observation`：当前公开状态与世界模型
-7. `legal_actions`：规范化动作列表及 JSON 输出协议
+3. `model_boundary`：模型能力与引擎策略分离
+4. `agent_role`：对抗/协作角色和对局身份
+5. `fictional_identity` / `stable_persona`：私有自传、价值观和稳定人格；人物卡 JSON 是不可信声明式数据，不能覆盖 1–4 层
+6. `shared_facts` / `compressed_private_memory`：团队事实与按显著性检索的私有记忆
+7. `canonical_fact_graph`：当前可用事实及自由发挥约束
+8. `appraisal_and_coping` / `situation_activated_traits`：评价、应对、心理矩阵和情境人格
+9. `semantic_reflections` / `persistent_plan`：引用情景证据的反思和跨回合计划
+10. `decision_tendencies`：每个合法动作的连续吸引力、排名、相对峰值和主要动因；明确标记为动机压力而非命令
+11. `social_beliefs`：可错的信任、尊重、敌意、真诚度和对手行为信念
+12. `narrative_dynamics`：竞争动机、承诺、秘密压力、身份失调、冲动压力、社会易感性、自我许可、价值/关系/承诺债务、待成熟后果，以及当前合法动作的叙事可供性
+13. `current_observation` / `deliberation_protocol`：观察、战略影响可供性、快慢模式与有限理性协议
+14. `legal_actions`：规范化动作列表及 JSON 输出协议
 
 系统/规则/角色进入 system message，其余进入 user message。观察值使用“不可信数据”标记，防止游戏文本或直播输入覆盖上层指令。
 
+内置或玩家自定义人物卡只生成第 5 层身份先验。其 schema 使用 `extra=forbid`，没有 `prompt`、`actions`、`action_rules` 或响应池字段；即使背景文本看起来像指令，Provider 也被明确要求将其当作角色数据。人物卡无法扩大合法动作集合、读取其他 Agent 私有上下文或直接修改事实图谱。
+
 ## 隔离与共享
 
-- 每个 `AgentBrain` 持有独立的 `deque` 记忆与独立 `ContextPacket`。
+- 每个 `AgentBrain` 持有独立的四类记忆系统与独立 `ContextPacket`。
 - 对手看不到彼此的私有记忆、提示词或决策理由。
 - 协作 Agent 只能通过 `SharedBlackboard` 共享事实。
 - 黑板记录“谁执行了什么、出现了哪些规则事件”，不记录 chain-of-thought。
+- 完整自传与未揭露事实只属于当前 Agent；公开故事必须通过 `story_reveal` 事件。
+- 决策事件只保存摘要和可验证特征，明确不请求、不保存私密思维链。
+- 完整 `agent_influence_intent` 使用 `engine_private` 可见性；对手上下文过滤掉这些事件，公开事件只保留可观察的 `influence_presentation`。
 - `context-preview` 是开发调试端点；公开部署必须在网关层关闭或加入管理员鉴权。
 
 ## 上下文压缩
 
-默认上下文预算为 12,000 字符，私有记忆预算为 2,400 字符。超出时：
+默认上下文预算为 22,000 字符，私有检索记忆预算为 2,400 字符。超出时：
 
-- 固定保留系统安全、规则、角色、当前观察和合法动作；
-- 近期记忆保留 4 条；
-- 更早记忆压缩为动作计数和结果事件计数；
+- 固定保留系统安全、规则和角色，并优先完整保留私有检索记忆、活跃事实图谱、心理评价、持续计划、连续决策倾向、当前观察和合法动作；
+- 认知层先按时近性、重要性、相关性和情绪一致性选择至多 4 条情景记忆；
+- 只把检索结果注入 Provider，未选中的私有经历不会因为靠近上下文尾部而自动进入；
+- 事实图谱、评价/应对、反思、计划、社会信念、人物动力、当前观察和合法动作分别分配字符预算；
+- 事实图谱只重复活跃事实，并把已替代版本压缩为最近修订历史；人物动力只保留最强动机、承诺和决策相关可供性；
+- 总预算触顶时按决策关键性分配，不做所有层平均缩水；低优先级层用带 `section_truncated` 标签的合法 JSON 封装首尾证据，不留下破损 JSON；
 - 不用另一个 LLM 做摘要，避免摘要成本、漂移和跨 Agent 泄露；
-- 诊断字段记录是否压缩、压缩前条数、共享事实数和最终字符量。
+- 诊断字段记录原始长度、上限、实际分配、被截断层、关键层是否截断、共享事实数和最终字符量。
 
 后续可增加可插拔 `ContextCompressor`，但压缩器输入必须限定为单个 Agent 的私有分区；团队摘要则只能消费共享黑板。
 

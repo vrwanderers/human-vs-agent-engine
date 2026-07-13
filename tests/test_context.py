@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -47,11 +48,85 @@ def test_blackboard_is_team_scoped() -> None:
         board.publish("outsider", "inject this")
 
 
+def test_layer_budget_preserves_every_header_instead_of_tail_slicing() -> None:
+    policy = ContextPolicy(total_char_budget=5_000, memory_char_budget=1_200)
+    packet = ContextComposer(policy).compose(
+        match_id="long-match",
+        agent_id="agent-a",
+        role="opponent",
+        mod=DebateArena(),
+        state={"oversized": "state" * 1_000},
+        world_model={"uncertainty": 0.4},
+        memory=[{"turn": 1, "action": "evidence", "detail": "memory" * 1_000}],
+        legal_actions=[Action(type="evidence")],
+        shared_facts=[],
+        identity={"background": "history" * 50},
+        fact_graph={"facts": [{"object": "fact" * 1_000}]},
+    )
+    rendered = "\n".join(message.content for message in packet.messages)
+    assert packet.diagnostics["char_count"] <= policy.total_char_budget
+    assert packet.diagnostics["truncated_sections"]
+    for layer in range(7, 15):
+        assert f"[L{layer}" in rendered
+
+
+def test_priority_budget_keeps_decision_critical_layers_auditable() -> None:
+    packet = ContextComposer(ContextPolicy(total_char_budget=8_000)).compose(
+        match_id="priority-match",
+        agent_id="agent-a",
+        role="opponent",
+        mod=DebateArena(),
+        state={"observation": "pressure" * 1_000},
+        world_model={"objective": "hold a defensible position"},
+        memory=[{"detail": "memory" * 1_000}],
+        legal_actions=[Action(type="evidence"), Action(type="rebuttal")],
+        shared_facts=[],
+        decision_tendencies={
+            "semantics": "fallible_motivational_attraction_not_action_command",
+            "actions": [
+                {"action_index": 0, "attraction": 0.61, "rank": 1},
+                {"action_index": 1, "attraction": 0.39, "rank": 2},
+            ],
+        },
+        appraisal={"coping": "assert_boundary"},
+        current_plan={"strategic_goal": "hold a defensible position"},
+    )
+
+    diagnostics = packet.diagnostics
+    assert diagnostics["decision_tendencies_layered"] is True
+    assert diagnostics["section_allocations"]["legal_actions"] > 0
+    assert diagnostics["section_original_chars"]["current_observation"] > 0
+    assert diagnostics["section_capped_chars"]["current_observation"] <= 4_800
+    assert "legal_actions" not in diagnostics["critical_sections_truncated"]
+
+
+def test_truncated_context_payload_remains_valid_json() -> None:
+    rendered = ContextComposer()._valid_truncated_payload(
+        json.dumps({"oversized": "context" * 200}), 240
+    )
+    parsed = json.loads(rendered)
+    assert len(rendered) <= 240
+    assert parsed["section_truncated"] is True
+
+
 class FakeProvider:
     name = "fake"
 
     async def complete(self, _request):
         return LLMResponse('{"action_index": 1}', "fake-1", {}, {})
+
+
+class InvalidPlanProvider:
+    name = "invalid-plan"
+
+    async def complete(self, _request):
+        return LLMResponse(
+            '{"action_index":0,"response_plan":'
+            '{"strategy_weights":{"invented_illegal_strategy":1}}}',
+            "fake-2",
+            {},
+            {},
+        )
 
 
 def test_provider_registry_and_llm_decision_are_rule_constrained() -> None:
@@ -68,3 +143,14 @@ def test_provider_registry_and_llm_decision_are_rule_constrained() -> None:
     assert response.model == "fake-1"
     with pytest.raises(ValueError, match="already registered"):
         registry.register(FakeProvider())
+
+
+def test_llm_response_plan_rejects_strategies_outside_legal_actions() -> None:
+    client = LLMDecisionClient(InvalidPlanProvider())
+    with pytest.raises(ValueError, match="illegal strategy"):
+        asyncio.run(
+            client.choose_action_and_facts(
+                [LLMMessage("user", "choose")],
+                [{"type": "answer_honestly"}, {"type": "set_boundary"}],
+            )
+        )
